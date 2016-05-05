@@ -454,7 +454,7 @@ struct queue_info {
 	__u64		    cpu_mask[2];    /* CPU iBit Mask */
  	__u32		    cq_ivec;	    /* Completion Queue vector ID */
 	__u32		    ivec_acquired;  /* vector ID acquired */
-	__u8		    ivec_name[16];  /* Vector ascii name */
+	__u8		    ivec_name[32];  /* Vector ascii name */
 	__u32		    phase;	    /* Completion queue phase (0/1) */
 	__u32		    timeout_id;	    /* Expired timeout ID */
 	__u16 		    tail;	    /* Completion queue tail index */
