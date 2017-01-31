@@ -78,7 +78,7 @@
 #define BIT_30		(1 << 30)
 #define BIT_31		(1 << 31)
 
-#define	DRV_NAME	"nvme"
+#define	DRV_NAME	"nvme_radian"
 #define	DEV_NAME	"nvme"
 
 #ifdef DEBUG
