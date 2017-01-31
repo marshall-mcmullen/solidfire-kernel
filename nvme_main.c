@@ -1015,11 +1015,21 @@ nvme_shutdown(struct pci_dev *pci_dev)
 	dev->unlock_func(&dev->lock, &dev->lock_flags);
 }
 
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 
 static DEFINE_PCI_DEVICE_TABLE(nvme_id_table) = {
 	{PCI_DEVICE_CLASS(0x010802, 0xffffff)},
 	{ 0, }
 };
+
+#else
+
+static const struct pci_device_id nvme_id_table[] = {
+	{PCI_DEVICE_CLASS(0x010802, 0xffffff)},
+	{ 0, }
+};
+
+#endif
 
 MODULE_DEVICE_TABLE(pci, nvme_id_table);
 
@@ -1191,8 +1201,13 @@ nvme_map_user_pages(struct nvme_dev *dev, struct usr_io *uio,
 	DPRINT8("offset %d, page count %d, pages %p\n", offset, count, pages);
 
 	down_read(&current->mm->mmap_sem);
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 	status = get_user_pages(current, current->mm, uio->addr & PAGE_MASK,
 				count, 1, 0, pages, NULL);
+#else
+	status = get_user_pages(uio->addr & PAGE_MASK, count, FOLL_WRITE, pages, NULL);
+
+#endif
 	up_read(&current->mm->mmap_sem);
 	DPRINT8("user pages count %d, status 0x%x\n", count, status);
 
@@ -1959,7 +1974,11 @@ nvme_disk_stat_cong(struct nvme_dev *dev, struct ns_info *ns, struct bio *bio)
 
 		if (!nvme_do_io_stat)
 			return;
+#if ( (LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 		if (bio->bi_rw & BIO_REQ_DISCARD)
+#else
+		if (bio_op(bio) & BIO_REQ_DISCARD)
+#endif
 			return;
 
 		cpu = part_stat_lock();
@@ -2005,7 +2024,11 @@ nvme_disk_stat_in(struct nvme_dev *dev, struct cmd_info *cmd_info,
 
 		if (!nvme_do_io_stat)
 			return;
+#if ( (LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 		if (bio->bi_rw & BIO_REQ_DISCARD)
+#else
+		if (bio_op(bio) & BIO_REQ_DISCARD)
+#endif
 			return;
 
 		cpu = part_stat_lock();
@@ -2047,7 +2070,11 @@ nvme_disk_stat_completion(struct nvme_dev *dev, struct cmd_info *cmd_info)
 
 		if (!nvme_do_io_stat)
 		return;
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 	if (!bio || (bio->bi_rw & BIO_REQ_DISCARD))
+#else
+	if (!bio || (bio_op(bio) & BIO_REQ_DISCARD))
+#endif
 			return;
 
 		cpu = part_stat_lock();
@@ -2087,7 +2114,11 @@ nvme_disk_stat_iodone(struct nvme_dev *dev, struct cmd_info *cmd_info)
 		 */
 		if (!nvme_do_io_stat)
 		return;
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 		if (!bio || (bio->bi_rw & BIO_REQ_DISCARD))
+#else
+		if (!bio || (bio_op(bio) & BIO_REQ_DISCARD))
+#endif
 			return;
 
 		cpu = part_stat_lock();
@@ -3943,9 +3974,7 @@ nvme_attach_ns(struct nvme_dev *dev, struct ns_info *ns, int lock)
 	 * BIO discard request depend upon controller identify data.
 	 */
 	if (dev->nvmCmdSupport & (1 << 2)) {
-		ns->queue->queue_flags |= (
-					   (1 << QUEUE_FLAG_SECDISCARD) |
-					   (1 << QUEUE_FLAG_DISCARD));
+		ns->queue->queue_flags |= (1 << QUEUE_FLAG_DISCARD);
 	}
 #endif
 	DPRINT2("NS [%d], queue %p, queue flags 0x%0lx\n", ns->id, ns->queue,
@@ -4003,7 +4032,9 @@ nvme_attach_ns(struct nvme_dev *dev, struct ns_info *ns, int lock)
 	ns->disk->private_data  = ns;
 	ns->disk->queue 		= ns->queue;
 	ns->disk->fops  		= &nvme_fops;
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 	ns->disk->driverfs_dev  = &dev->pci_dev->dev;
+#endif
 
 	/**
 	 * Assign disk name.
@@ -4682,7 +4713,11 @@ nvme_submit_request(struct queue_info *qinfo, struct ns_info *ns,
 		/**
 		 * process bio sglist and setup prp list.
 		 */
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 		if (unlikely(bio->bi_rw & BIO_REQ_DISCARD)) {
+#else
+		if (unlikely(bio_op(bio) & BIO_REQ_DISCARD)) {
+#endif
 			DPRINT2("bio %p, ns %d, DISCARD size %u\n",
 						bio, ns->id, bio->bi_iter.bi_size);
 			length = bio->bi_iter.bi_size;
@@ -4695,15 +4730,24 @@ nvme_submit_request(struct queue_info *qinfo, struct ns_info *ns,
 			/* force getting out of the loop */
 			base_info->cmd_bvec_iter.bi_size = 0;
 		} else
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 			if (unlikely(bio->bi_rw & BIO_REQ_FLUSH)) {
+#else
+			if (unlikely(bio_op(bio) & BIO_REQ_FLUSH)) {
+#endif
 				DPRINT6("bio %p, ns %d, FLUSH cache...\n",bio, ns->id);
 				cmd->header.opCode = NVM_CMD_FLUSH;
 				cmd->header.namespaceID = cpu_to_le32(ns->id);
 				length = 0;
 			} else {
 				if (!bio->bi_iter.bi_size) {
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 					EPRINT("bio %p, rw %lx, vcnt %d, len %d\n",
 						   bio, bio->bi_rw, bio->bi_vcnt, bio->bi_iter.bi_size);
+#else
+					EPRINT("bio %p, rw %x, vcnt %d, len %d\n",
+						   bio, bio->bi_opf, bio->bi_vcnt, bio->bi_iter.bi_size);
+#endif
 					nvme_put_cmd(qinfo, cmd_info);
 					qinfo->nr_req--;
 					bio->bi_error = -EINVAL;
@@ -4737,16 +4781,32 @@ nvme_submit_request(struct queue_info *qinfo, struct ns_info *ns,
 						ns->id, cmd->cmd.read.numLBA,
 						cmd->cmd.read.startLBA,
 						ns->lba_shift);
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 				if (bio->bi_rw & BIO_REQ_RAHEAD)
+#else
+				if (bio_op(bio) & BIO_REQ_RAHEAD)
+#endif
 					cmd->cmd.read.datasetMgmnt = 7;
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 				if (bio->bi_rw & (BIO_REQ_FAILFAST_DEV | BIO_REQ_RAHEAD))
+#else
+				if (bio_op(bio) & (BIO_REQ_FAILFAST_DEV | BIO_REQ_RAHEAD))
+#endif
 					cmd->cmd.read.limitedRetry = 1;
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 				if (bio->bi_rw & BIO_REQ_FUA)
+#else
+				if (bio_op(bio) & BIO_REQ_FUA)
+#endif
 					cmd->cmd.read.forceUnitAccess = 1;
 			}
 			cmd->header.cmdID = cmd_info->cmd_id;
 			cmd_info->timeout_id = dev->timeout_id;
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 			if (!(bio->bi_rw & BIO_REQ_DISCARD)) {
+#else
+			if (!(bio_op(bio) & BIO_REQ_DISCARD)) {
+#endif
 				qinfo->timeout[cmd_info->timeout_id]++;
 			}
 #if DO_IO_STAT
@@ -5144,7 +5204,11 @@ nvme_process_cq(struct queue_info *qinfo)
 				bio = cmd_info->req;
 
 				if ((cmd_info->cmd_retries < MAX_RETRY) &&
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 					!(bio->bi_rw & BIO_REQ_WRITE)) {
+#else
+					!(bio_op(bio) & BIO_REQ_WRITE)) {
+#endif
 
 					DPRINT("Retrying BIO %p, vcnt %d, idx %d\n",
 						   bio, bio->bi_vcnt, bio->bi_iter.bi_idx);
@@ -5383,7 +5447,11 @@ nvme_make_request(struct request_queue *q, struct bio *bio)
 	}
 #if USE_NS_ATTR
 	if (unlikely((ns->flags & NS_READONLY) &&
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 				(bio->bi_rw & BIO_REQ_WRITE))) {
+#else
+				(bio_op(bio) & BIO_REQ_WRITE))) {
+#endif
 		DPRINT1("*** Rejecting WRITE request,  NS is READONLY. ns_id %d\n",
 								ns->id);
 		bio->bi_error = -EACCES;
@@ -5393,7 +5461,11 @@ nvme_make_request(struct request_queue *q, struct bio *bio)
 #endif
 
 
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 	if ( bio_rw(bio) ) {
+#else
+	if ( bio_data_dir(bio) ) {
+#endif
 		dev->bytes_written += bio->bi_iter.bi_size;
 	} else {
 		dev->bytes_read += bio->bi_iter.bi_size;

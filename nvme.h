@@ -31,6 +31,8 @@
 #ifndef NVME_H_
 #define NVME_H_
 
+#include <linux/version.h>
+
 /**
  * @file nvme.h - header file describing IDT NVME driver data structures.
  * 		This file defines all data structures and constants used by
@@ -243,13 +245,25 @@ do {\
 				(cond), max_wait, (result));\
 } while(0)
 
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 
-#define BIO_REQ_WRITE		REQ_WRITE
+#define BIO_REQ_WRITE           REQ_WRITE
+#define BIO_REQ_FAILFAST_DEV    REQ_FAILFAST_DEV
+#define BIO_REQ_RAHEAD          REQ_RAHEAD
+#define BIO_REQ_FLUSH           REQ_FLUSH
+#define BIO_REQ_FUA             REQ_FUA
+#define BIO_REQ_DISCARD         REQ_DISCARD
+
+#else
+
 #define BIO_REQ_FAILFAST_DEV	REQ_FAILFAST_DEV
-#define BIO_REQ_RAHEAD		REQ_RAHEAD
-#define	BIO_REQ_FLUSH 		REQ_FLUSH
 #define	BIO_REQ_FUA	 	REQ_FUA
-#define	BIO_REQ_DISCARD 	REQ_DISCARD
+#define BIO_REQ_RAHEAD		REQ_RAHEAD
+#define BIO_REQ_WRITE		REQ_OP_WRITE
+#define	BIO_REQ_FLUSH 		REQ_OP_FLUSH
+#define	BIO_REQ_DISCARD 	REQ_OP_DISCARD
+
+#endif
 
 #define ADMIN_Q_SIZE	128
 #define MAX_NR_QUEUES	128
