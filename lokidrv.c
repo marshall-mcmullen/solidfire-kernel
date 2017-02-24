@@ -202,7 +202,7 @@ static int nv_bdev_ioctl(struct inode *inode, struct file *file,
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 2, 0)
-static void __nvram_make_request(struct request_queue *q, struct bio *bio);
+static blk_qc_t __nvram_make_request(struct request_queue *q, struct bio *bio);
 #endif
 static int nvram_make_request(struct request_queue *q, struct bio *bio);
 
@@ -4871,7 +4871,7 @@ static long cdev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	}
 
 	/* get the hba handle from the inode */
-	nvhba = get_nvhba(filp->f_dentry->d_inode);
+	nvhba = get_nvhba(file_inode(filp));
 	if (nvhba == NULL) {
 		return -EINVAL;
 	}
@@ -5183,7 +5183,7 @@ nv_page_cleanup(cdev_request_t *creq, int rw)
 		if (rw == DMA_READ)
 			SetPageDirty(pages[i]);
 
-		page_cache_release(pages[i]);
+		put_page(pages[i]);
 	}
 
 	if (creq->cr_nr_pages > 1)
@@ -5557,12 +5557,8 @@ nv_pin_user_pages(struct page **page_list, struct iovec *iov, int rw,
 					iov->iov_len);
 
 	/* pin down the user pages */
-	down_read(&current->mm->mmap_sem);
-	ret = get_user_pages(current, current->mm,
-				(unsigned long)iov->iov_base,
-				*nr_pages, rw == DMA_READ, 0,
-				page_list, NULL);
-	up_read(&current->mm->mmap_sem);
+	ret = get_user_pages((unsigned long)iov->iov_base,
+			     *nr_pages, rw == DMA_READ, page_list, NULL);
 
 	if (ret < *nr_pages)
 		return -1;
@@ -6268,11 +6264,13 @@ nv_kmem_cache_destroy(void)
 }
 
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,24)
-#define nvram_endio(bio, size, status)	bio_endio(bio, status)
-#else
-#define nvram_endio(bio, size, status)	bio_endio(bio, size, status)
-#endif
+//#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,24)
+//#define nvram_endio(bio, size, status)	bio_endio(bio, status)
+//#else
+//#define nvram_endio(bio, size, status)	bio_endio(bio, size, status)
+//#endif
+
+#define nvram_endio(bio, size, status)	bio_endio(bio)
 
 static void
 nv_blk_req_done(dma_request_t *dma_req)
@@ -6280,20 +6278,20 @@ nv_blk_req_done(dma_request_t *dma_req)
 	struct bio *bio;
 
 	bio = dma_req->dma_private;
-	nvram_endio(bio, bio->bi_size, dma_req->dma_status);
+	nvram_endio(bio, bio->bi_iter.bi_size, dma_req->dma_status);
 
 	kmem_cache_free(nv_dma_req_cache, dma_req);
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 2, 0)
-static void
-__nvram_make_request(struct request_queue *q, struct bio *bio)
+static blk_qc_t __nvram_make_request(struct request_queue *q, struct bio *bio)
 {
 	int ret;
 
 	ret = nvram_make_request(q, bio);
 	if (ret != 0)
-		nvram_endio(bio, bio->bi_size, ret);
+		nvram_endio(bio, bio->bi_iter.bi_size, ret);
+	return ret;
 }
 #endif
 
@@ -6311,14 +6309,16 @@ static int
 nvram_make_request(struct request_queue *q, struct bio *bio)
 {
 	int	ret = 0;
-	int	segno;
+//	int	segno;
+	struct  bvec_iter iter;
 	int	nr_splits = 0;
 	int	rw;
 	u32_t	valid_bytes;
 	u32_t	count;
 	u64_t	offset;
 	unsigned long	paddr;
-	struct bio_vec	*bvec;
+//	struct bio_vec	*bvec;
+	struct bio_vec	bvec;
 	dma_request_t	*dma_req;
 	dma_request_t	*dma_req_head;
 	nvram_hba_t	*nvhba;
@@ -6328,12 +6328,12 @@ nvram_make_request(struct request_queue *q, struct bio *bio)
 
 	if(bio->bi_vcnt <= 0) {
 		mv_printk_dbg("bi_vcnt = %d, size: %u calling endio()\n",
-				bio->bi_vcnt, bio->bi_size);
-		nvram_endio(bio, bio->bi_size, 0);
+				bio->bi_vcnt, bio->bi_iter.bi_size);
+		nvram_endio(bio, bio->bi_iter.bi_size, 0);
 		return 0;
 	}
 
-	offset = bio->bi_sector;
+	offset = bio->bi_iter.bi_sector;
 	offset *= NV_BDEV_SECTOR_SZ;
 
 	count = bio_sectors(bio);
@@ -6374,9 +6374,12 @@ nvram_make_request(struct request_queue *q, struct bio *bio)
 			&cntxt.prd, &cntxt.nr_prds);
 
 	cntxt.prd_idx = -1;
-	bio_for_each_segment(bvec, bio, segno) {
-		paddr = bvec_to_phys(bvec);
-		valid_bytes = bvec->bv_len;
+//	bio_for_each_segment(bvec, bio, segno) {
+//		paddr = bvec_to_phys(bvec);
+//		valid_bytes = bvec->bv_len;
+	bio_for_each_segment(bvec, bio, iter) {
+		paddr = bvec_to_phys(&bvec);
+		valid_bytes = bvec.bv_len;
 
 		ret = host_prd_try_merge(&cntxt, paddr, valid_bytes);
 		if (ret != 0) {
@@ -6416,7 +6419,7 @@ prep_err:
 	else
 		kmem_cache_free(nv_dma_req_cache, dma_req_head);
 
-	nvram_endio(bio, bio->bi_size, ret);
+	nvram_endio(bio, bio->bi_iter.bi_size, ret);
 	return 0;
 }
 
