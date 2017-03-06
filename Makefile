@@ -2,7 +2,7 @@ VERSION = 4
 PATCHLEVEL = 9
 SUBLEVEL = 10
 EXTRAVERSION =
-NAME = Roaring Lionus
+NAME = Solidfire Kernel
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
