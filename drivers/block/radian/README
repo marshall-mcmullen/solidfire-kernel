@@ -1,0 +1,246 @@
+#****************************************************************************
+#
+# Copyright (c) 2010 - 2014 PMC-Sierra.
+# Copyright (c) 2014 Radian Memory Systems
+#     All Rights Reserved
+#
+# Distribution of source code or binaries derived from this file is not
+# permitted except as specifically allowed for in the Integrated Device
+# Technology Software License agreement.  All copies of this source code
+# modified or unmodified must retain this entire copyright notice and
+# comment as is.
+#
+# THIS SOFTWARE IS PROVIDED "AS IS" AND WITHOUT ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+#
+#****************************************************************************
+
+Description - 
+	Release 0.95 on 10 June 2014
+	PMC-Sierra Block device driver support for NVMe controller card.
+	Driver may be included as part of kernel or as a loadable module 
+	depending on PCI driver.
+
+Resolved issues -
+
+	Release 0.95:
+	Fixed issue: non consecutive CPU ids result in kernel panic.
+	
+	Release 0.94:
+	Fixed issue with Format for XFS (PD-47)
+	Added additional PMC-Sierra device ID F117
+
+	Release 0.93:
+	Cancelling IOCTL commands when driver is performing NVMe reset (PD-22)
+	Return error on IOCTL commands if controller is offline (PD-23)
+	S.M.A.R.T log structure was defined as "packed" (PD-24)
+	Fixed "numDw" field in the log page structure to be 12 bits (PD-25)
+	Skipping 0-capacity namespaces (PD-26)
+
+	Release 0.91:
+	Fixed compile issue for kernel version 3.0.0
+	Fixed Error translation to string handling.
+	Fixed Probe hang issue when board fails to reset
+	Fixed Queue length parameter interpretation.
+	Updated Copyright notice.
+
+	Release 0.90:
+	Added DIF Support.
+	Added DIF TYPE1 to validate application TAG information.
+	Added DIF TYPE2 support.
+	Fixed issue validating NameSpace ID for pass-through IOCTL request
+
+	Release 0.83:
+	Fixed Centos 5.8 compile issue.
+	Fixed controller reset timeout calculation.
+	Switched to delay instead of wait function for reset due to 90 second FW timeout.
+	Fixed mdelay issue by including delay.h header file for Ubuntu 11.10.
+
+	Release 0.82:
+	Disabled Send AEN.
+	Fixed Lock contention during AEN event processing.
+	Modified reset logic to use controller supplied timeout value.
+	Modified nvme_hw_stop to prevent clearing enable if not already in Ready state.
+	Fixed IOCTL Vendor command to allow format of created Namespace.
+	Added additional device IDs 80D1 and 80D2.
+
+	Release 0.81:
+	Fixed timeout thread device INIT state handling.
+	Optimized Completion queue handling.
+	Disabled Premption to prevent race condition due to affinity issue.
+	Fixed Event log handling.
+	Fixed reboot/shutdown issue.
+
+	Release 0.80:
+	Fixed lba shift calculation for greater than 512 bytes logical block size.
+	Disabled threaded_interrupt by default
+
+	Release 0.79:
+	Resolved CPU preemption issue.
+	Create multi-threaded timeout recovery.
+	Fixed AMD Hang issue due to lock contentions.
+
+	Release 0.78:
+	Change to prevent clearing controller enable after shutdown.
+
+	Release 0.77:
+	Fixed Centos 5.8 MSIx interrupt routing issue.
+	Fixed non-threaded interrupt handling issue.
+	Added support for older kernels such as Centos5.8 and 6.3 to handle
+	    special IO requests such DISCARD correctly.
+	Added Check to discontinue chip revision 0 (ZA).
+	Corrected LBA range get_feature request to set proper NS_ID in header.
+
+Supported Features -
+	Driver currently supports multiple NVME cards.
+	Driver supports any device in class NVMe.
+	Driver queries controller and creates a device node for each 
+	Namespace starting from "Namespace 1". Device nodes are created
+	in "/dev/" directory by the order of their Namespace ID.
+
+	/dev/nvme0n1		# nvme0 presents controller ID 0
+	/dev/nvme0n2		# nx where 'x" presents Namespace ID.
+	/dev/nvme1n1		# nvme1 presents controller ID 1
+
+	Driver Also create a control node that is used by application to
+	send IOCTL, Admin.  Device nodes are created in "/dev/" directory.
+
+	/dev/nvme0		# nvmeX where X represents controller ID
+
+	For an RMS-200, character devices for mmap'ing memory are created
+
+	/dev/nvme0c1		# nvme0 presents controller ID 0
+	/dev/nvme0c2		# cx where 'x" presents Namespace ID.
+	/dev/nvme1c1		# nvme1 presents controller ID 1
+
+	File system TRIM is supported by driver. This feature is enabled 
+	and reported to OS file system upon discovery of firmware TRIM
+	feature.
+
+Block IO -
+	Driver supports standard Linux Block device interface. Linux disk
+	partitions may be created using "fdisk" Linux utility. The "fdisk"
+	is currently supported and other utilities have not yet been tested.
+
+	fdisk /dev/nvme0nx	# Create or view partitions on Namespace "x"
+
+File system -
+	File systems may be created on any partitions created by "fdisk". 
+	The file system is persistent across power cycles.
+
+Limitations -
+	PMC-Sierra driver may not co-exists with any other driver that supports NVME
+	    card. All drivers currently included as part of kernel should be 
+	    disabled prior to installing PMC-Sierra NVME driver.
+	Driver does not support revision 0 (ZA) NVMe controller.
+
+Parameters -
+	Driver parameters are shared among all controller and IO queue.
+	These allow administrator to modify default driver values such as 
+	submission and completion queue size, limit number of requests posted
+	to each IO queue. 
+
+	nvme_major		     # Set NVME driver major number
+				       Default of 0 to use OS assigned.
+	admin_cpl_queue_size	     # Set admin completion queue size
+				       Default is 1024. Writable only during
+				       driver load.
+	admin_sub_queue_size	     # Set admin submission queue size
+				       Default is 1024. Writable only during
+				       driver load.
+	io_cpl_queue_size	     # Set IO completion queue size
+				       Default is 1024. Writable only during
+				       driver load.
+	io_sub_queue_size	     # Set IO submission queue size
+				       Default is 1024. Writable only during
+				       driver load.
+	io_command_id_size	     # Set number of cached command IDs.
+				       Default is 1024, maximum 65535. Writable
+				       only during driver load.
+	transfer_size		     # Set maximum transfer size in K units.
+				       Default is 128. Writable only during
+				       driver load.
+	max_io_request               # IO queue throttle to limit number of IO
+				       posted to each queue.
+	intr_coalescing_threshold    # set interrupt coalescing completion 
+				       count. Default is 3. Writable only
+				       during driver load.
+	intr_coalescing_time         # set interrupt coalescing time.
+				       Default is 1. Writable only during
+				       driver load.
+	nvme_do_io_stat		     # Enable or disable IO statistics
+				       Default is 0 (disabled).
+	nvme_msix_enable             # Enable or disable MSI-X interrupt
+				       Default is 1 (enabled).
+
+SysFs -
+	Driver exports a set if functions through SysFS interface to allow
+	user to examine or control firmware options. There is a set of 
+	following attributes per controller.
+
+        ns_count		     # Show number of Namespaces currently
+				       configured (read only attribute).
+	hot_remove		     # Show list of offline Namespace or 
+				       force Namespace with specified ID 
+				       offline.
+	hot_add			     # Show list of online Namespace or
+				       attempt to online a Namespace with 
+				       specified ID
+	cache_enable		     # Show or set controller cache state.
+				       A "0" to disable and a "1" to enable.
+	shutdown		     # Force controller shutdown
+				       A "1" to force shutdown.
+	pci_id		     	     # This is a read only attribute that allows 
+				       System Administrator to determine PCI ID
+				       of each controller.
+
+Supported Kernel -
+	Driver has been tested on following Linux kernel versions:
+	
+	2.6.38-8-generic	(Ubuntu 11.04)
+	2.6.18-308-el5		(Centos 5.8)
+	2.6.32-279-el6		(Centos 6.3)
+	2.6.32-431.17.1-el6	(Centos 6.5)
+	3.6.8
+	3.8.0
+	3.10.0
+	4.4.6			(Fedora 22)
+
+Supported Hardware Platform -
+	Driver has been tested on following hardware platforms:
+
+	Dual node Xeon multi-processor.
+	Dual node AMD multi-processor.
+	Radian RMS-200 NVRAM.
+	Radian RMS-250 SSD.
+	Intel P3600 SSD.
+
+build -
+	The driver Makefile included with tarball that allow to build driver
+	without building the full kernel or all modules. However, driver
+	will build for currently running kernel.
+	Current build revision is determine by "uname -r". Driver expect the
+	current kernel header files and configuration information to be
+	present and valid.
+
+	make		# to build nvme.ko module
+			# depends upon "/lib/module/'uname -r'"
+
+install -
+	It is strongly Suggested to test driver load prior to including it
+	in kernel auto load. 
+
+
+	sudo insmod ./nvme.ko 	# to manually load the driver
+
+Auto load -
+	To allow driver to load automatically as part of the kernel.
+	This requires "root" permission to add "nvme" to list of default
+	kernel modules.
+
+	sudo ./install.sh
+
+
+
+
