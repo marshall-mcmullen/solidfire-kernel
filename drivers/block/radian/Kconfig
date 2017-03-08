@@ -1,0 +1,8 @@
+config RADIAN
+       tristate "Radian NVRAM Card Support"
+       depends on PCI
+       ---help---
+       This driver supports the Radian NVRAM PCI-e Card.
+
+       To compile this driver as a module, choose M here.  The module
+       will be called nvme_radian.

@@ -4,8 +4,8 @@
 
 ifneq ($(KERNELRELEASE),)
 
-obj-m := nvme.o
-nvme-y := nvme_main.o nvme_rms.o
+obj-m := nvme_radian.o
+nvme_radian-objs := nvme_main.o nvme_rms.o
 
 else
 
