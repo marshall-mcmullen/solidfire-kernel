@@ -25,6 +25,13 @@ config BLK_DEV_NVME_SCSI
 	  emulation to provide stable device names for mount by id, like
 	  some OpenSuSE and SLES versions.
 
+config RADIAN_NVME
+	bool "Radian NVRAM cache card support"
+	depends on NVME_CORE
+	---help---
+	  Add support for the Radian NVRAM cache card, used in SolidFire
+	  appliances.
+
 config NVME_FABRICS
 	tristate
 

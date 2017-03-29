@@ -31,6 +31,7 @@
 
 #include "nvme.h"
 #include "fabrics.h"
+#include "radian_ioctl.h"
 
 #define NVME_MINORS		(1U << MINORBITS)
 
@@ -736,7 +737,7 @@ static int nvme_submit_io(struct nvme_ns *ns, struct nvme_user_io __user *uio)
 			metadata, meta_len, io.slba, NULL, 0);
 }
 
-static int nvme_user_cmd(struct nvme_ctrl *ctrl, struct nvme_ns *ns,
+int nvme_user_cmd(struct nvme_ctrl *ctrl, struct nvme_ns *ns,
 			struct nvme_passthru_cmd __user *ucmd)
 {
 	struct nvme_passthru_cmd cmd;
@@ -1375,22 +1376,35 @@ static long nvme_dev_ioctl(struct file *file, unsigned int cmd,
 {
 	struct nvme_ctrl *ctrl = file->private_data;
 	void __user *argp = (void __user *)arg;
+	struct pci_dev *pdev = to_pci_dev(to_nvme_dev(ctrl)->dev);
 
-	switch (cmd) {
-	case NVME_IOCTL_ADMIN_CMD:
-		return nvme_user_cmd(ctrl, NULL, argp);
-	case NVME_IOCTL_IO_CMD:
-		return nvme_dev_user_cmd(ctrl, argp);
-	case NVME_IOCTL_RESET:
-		dev_warn(ctrl->device, "resetting controller\n");
-		return ctrl->ops->reset_ctrl(ctrl);
-	case NVME_IOCTL_SUBSYS_RESET:
-		return nvme_reset_subsystem(ctrl);
-	case NVME_IOCTL_RESCAN:
-		nvme_queue_scan(ctrl);
-		return 0;
-	default:
-		return -ENOTTY;
+	printk(KERN_INFO "send command 0x%x\n", cmd);
+	printk(KERN_INFO "got 0x%x 0x%x, compare 0x%x, 0x%x\n",
+	       pdev->vendor, pdev->device, RADIAN_NVME_VENDOR, RADIAN_NVME_DEV_ID);
+
+	if ( (pdev->vendor == RADIAN_NVME_VENDOR) &&
+	     (pdev->device == RADIAN_NVME_DEV_ID) ) {
+		/* Radian card, use those ioctl values instead */
+		printk(KERN_INFO "firing command 0x%x\n", cmd);
+		return radian_dev_ioctl(ctrl, cmd, arg);
+	} else {
+		/* Native nvme devices */
+		switch (cmd) {
+		case NVME_IOCTL_ADMIN_CMD:
+			return nvme_user_cmd(ctrl, NULL, argp);
+		case NVME_IOCTL_IO_CMD:
+			return nvme_dev_user_cmd(ctrl, argp);
+		case NVME_IOCTL_RESET:
+			dev_warn(ctrl->device, "resetting controller\n");
+			return ctrl->ops->reset_ctrl(ctrl);
+		case NVME_IOCTL_SUBSYS_RESET:
+			return nvme_reset_subsystem(ctrl);
+		case NVME_IOCTL_RESCAN:
+			nvme_queue_scan(ctrl);
+			return 0;
+		default:
+			return -ENOTTY;
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ obj-$(CONFIG_NVME_FABRICS)		+= nvme-fabrics.o
 obj-$(CONFIG_NVME_RDMA)			+= nvme-rdma.o
 
 nvme-core-y				:= core.o
+nvme-core-$(CONFIG_RADIAN_NVME)		+= radian_ioctl.o
 nvme-core-$(CONFIG_BLK_DEV_NVME_SCSI)	+= scsi.o
 nvme-core-$(CONFIG_NVM)			+= lightnvm.o
 
