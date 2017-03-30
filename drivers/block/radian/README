@@ -1,7 +1,7 @@
 #****************************************************************************
 #
 # Copyright (c) 2010 - 2014 PMC-Sierra.
-# Copyright (c) 2014 Radian Memory Systems
+# Copyright (c) 2014-2016 Radian Memory Systems, Inc.
 #     All Rights Reserved
 #
 # Distribution of source code or binaries derived from this file is not
@@ -206,6 +206,7 @@ Supported Kernel -
 	3.8.0
 	3.10.0
 	4.4.6			(Fedora 22)
+	4.9.17			(Fedora 24)
 
 Supported Hardware Platform -
 	Driver has been tested on following hardware platforms:
@@ -224,7 +225,7 @@ build -
 	current kernel header files and configuration information to be
 	present and valid.
 
-	make		# to build nvme.ko module
+	make		# to build nvme_radian.ko module
 			# depends upon "/lib/module/'uname -r'"
 
 install -
@@ -232,15 +233,18 @@ install -
 	in kernel auto load. 
 
 
-	sudo insmod ./nvme.ko 	# to manually load the driver
+	sudo insmod ./nvme_radian.ko 	# to manually load the driver
 
 Auto load -
 	To allow driver to load automatically as part of the kernel.
-	This requires "root" permission to add "nvme" to list of default
+	This requires "root" permission to add "nvme_radian" to list of default
 	kernel modules.
 
 	sudo ./install.sh
 
+initrd -
+	In order to prevent the native linux nvme driver from taking over
+	the device it is possible to exclude the nvme driver from the
+	initrd file using the command (On Fedora/Centos distribution):
 
-
-
+	cd /boot; sudo dracut --omit-drivers nvme --force

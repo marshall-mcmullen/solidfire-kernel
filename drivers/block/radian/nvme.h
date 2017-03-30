@@ -1,6 +1,7 @@
 /*****************************************************************************
  *
  * Copyright (C) 2009-2013  Integrated Device Technology, Inc.
+ * Copyright (C) 2014-2016  Radian Memory Systems, Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,8 +31,6 @@
 
 #ifndef NVME_H_
 #define NVME_H_
-
-#include <linux/version.h>
 
 /**
  * @file nvme.h - header file describing IDT NVME driver data structures.
@@ -178,8 +177,14 @@
 #define	DPRINTX12(fmt, arg...)
 #endif
 
+#if 0
 #define	EPRINT(fmt, arg...)	\
 	dev_printk(KERN_ERR, dev->dma_dev, "[%s] " fmt , __func__ , ##arg)
+#else
+#define	EPRINT(fmt, arg...)	\
+	dev_printk(KERN_ERR, dev->dma_dev, fmt , ##arg)
+#endif
+
 
 #define	NPRINT(fmt, arg...)	\
 	dev_printk(KERN_NOTICE, dev->dma_dev, "[%s] " fmt , __func__ , ##arg)
@@ -245,25 +250,10 @@ do {\
 				(cond), max_wait, (result));\
 } while(0)
 
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-
-#define BIO_REQ_WRITE           REQ_WRITE
-#define BIO_REQ_FAILFAST_DEV    REQ_FAILFAST_DEV
-#define BIO_REQ_RAHEAD          REQ_RAHEAD
-#define BIO_REQ_FLUSH           REQ_FLUSH
-#define BIO_REQ_FUA             REQ_FUA
-#define BIO_REQ_DISCARD         REQ_DISCARD
-
-#else
 
 #define BIO_REQ_FAILFAST_DEV	REQ_FAILFAST_DEV
-#define	BIO_REQ_FUA	 	REQ_FUA
 #define BIO_REQ_RAHEAD		REQ_RAHEAD
-#define BIO_REQ_WRITE		REQ_OP_WRITE
-#define	BIO_REQ_FLUSH 		REQ_OP_FLUSH
-#define	BIO_REQ_DISCARD 	REQ_OP_DISCARD
-
-#endif
+#define	BIO_REQ_FUA	 	REQ_FUA
 
 #define ADMIN_Q_SIZE	128
 #define MAX_NR_QUEUES	128
@@ -368,6 +358,8 @@ struct nvme_dev {
 	struct proc_dir_entry *proc_dir;
 	struct proc_dir_entry *proc_entry_stats;
 	struct proc_dir_entry *proc_entry_qinfo;
+	struct proc_dir_entry *proc_entry_async;
+
 	u64					dma_int;
 	u64					work_queued;
 	u64					bytes_written;
@@ -389,6 +381,15 @@ struct nvme_dev {
 	u32			boot_cfg;
 
 	int			rms_off;
+	int 		rms_async_enable;
+
+	struct rms_priv {
+		spinlock_t		lock;		/* Device context lock */
+		ulong			lock_flags;	/* flags used for lock */
+
+		struct list_head working;
+		struct list_head claimable;
+	} rms;
 };
 
 /**
@@ -523,6 +524,8 @@ struct cmd_info {
 #define LOG_CONTEXT	5		    /* Log Page request */
 #define ERR_CONTEXT	6		    /* Error Page request */
 #define ABORT_CONTEXT	7		    /* Command aborted */
+
+#define ADMIN_ASYNC_CONTEXT 8
 
 #define MAX_RETRY	2
 
