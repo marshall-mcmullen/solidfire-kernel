@@ -551,7 +551,7 @@ rms_cdev_open(struct inode *inode, struct file *file)
 	if (!cdev)
 		return -ENXIO;
 
-	if (file->f_mode & FMODE_WRITE) {
+	if (file->f_mode & (FMODE_READ | FMODE_WRITE)) {
 		dev = cdev->dev;
 		result = nvme_rms_wait_charge(dev, file->f_flags & O_NDELAY);
 		if (result)

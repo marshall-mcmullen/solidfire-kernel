@@ -172,7 +172,8 @@
  * Conditional compile flags
  */
 #define USE_NS_ATTR 	0
-#define NVME_DISCARD		1
+
+#define NVME_DISCARD		0
 #define DO_IO_STAT  		0
 #define SEND_AEN		1
 #define FORCE_ERROR 	0
@@ -239,7 +240,7 @@ static int 	reset_card_on_timeout = 0;
 static int  nvme_idle_count = 0;
 int nvme_dbg = NVME_DEBUG_ALL;
 #endif
-#define NVME_REL	"1.8"
+#define NVME_REL	"1.8rc2"
 
 /**
  * For Instance allocation.
@@ -1168,7 +1169,7 @@ nvme_open_disk(struct block_device *bdev, fmode_t mode)
 	struct nvme_dev *dev = ns->dev;
 	int result = 0;
 
-	if (mode & FMODE_WRITE) {
+	if (mode & (FMODE_READ | FMODE_WRITE)) {
 		result = nvme_rms_wait_charge(dev, mode & FMODE_NDELAY);
 		if (result)
 			return result;
