@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (C) 2013 Radian Memory Systems
+ * Copyright (C) 2013-2016 Radian Memory Systems, Inc.
  *
  * This program is free software: When used with a Linux driver,
  * you can redistribute it and/or modify it under the terms of the GNU
@@ -57,13 +57,7 @@
 #define GLP_ID_RELEASED                0xE2 /* Released pages Log Page ID */
 #define GLP_ID_AEN_TRIGGER             0xF1 /* RMS-Trigger-specific       */
 
-#define GLP_ID_AEN_TRIGGER_LOGPGSIZ    680
-			/* little larger than RMSVendorSpecific.h: nvme_aer_ind_rms250_t -
-			 * but certainly less than PAGE_SIZE for efficiency
-			 * TODO we really should have rmsVendorSpecific reflected accurately
-			 * in this driver since afterall it is RMS-specific.
-			 */
-
+#define GLP_ID_AEN_TRIGGER_LOGPGSIZ    4000 /* Room for future growth */
 
 /*
  * This is defined in NVMeVendorSpecific.h in the firmware
@@ -110,7 +104,7 @@ enum {
 struct dialog_page_msg {
 	u32 page_id;
 	u32 page_len;
-	u8	log_page[4000];
+	u8	log_page[4096];
 };
 
 /*
@@ -181,19 +175,23 @@ extern int forcerdy;
 int nvme_rms_wait_charge(struct nvme_dev *dev, int ndelay);
 void nvme_rms_info(struct nvme_dev *dev);
 int nvme_rms_send_timestamp(struct nvme_dev *dev, struct nvme_cmd *entry);
-int rms200_prepare_and_send_page(u32 page_id, u32 page_size, void *log_page);
-int rms200_setup_genetlink(void);
-void rms200_teardown_genetlink(void);
-void rms200_allowed_admin_cmd(struct nvme_dev *dev, struct usr_io *uio);
-int rms200_alloc_char_dev(struct nvme_dev *dev);
-void rms200_free_char_dev(struct nvme_dev *dev);
-void rms200_map_bar4(struct nvme_dev *dev);
+int rms_prepare_and_send_page(u32 page_id, u32 page_size, void *log_page);
+int rms_setup_genetlink(void);
+void rms_teardown_genetlink(void);
+void rms_allowed_admin_cmd(struct nvme_dev *dev, struct usr_io *uio);
+int rms_alloc_char_dev(struct nvme_dev *dev);
+void rms_free_char_dev(struct nvme_dev *dev);
+void rms_map_bar4(struct nvme_dev *dev);
 void rms_check_ns_count(struct nvme_dev *dev);
+void nvme_async_dump(struct nvme_dev* dev, int verbosity);
+int nvme_async_cleanup(struct nvme_dev* dev);
+
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0))
-int rms200_proc_dump_nvme_stats(char *buf, char **start, off_t offset,
+int rms_proc_dump_nvme_stats(char *buf, char **start, off_t offset,
 	int count, int *eof, void *data);
+
 #else
-extern const struct file_operations rms200_stats_proc_fops;
+extern const struct file_operations rms_stats_proc_fops;
 extern const struct file_operations rms_proc_qinfo_fops;
 #endif
 

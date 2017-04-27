@@ -1,1 +1,1 @@
-# Radian 1.7 driver building on 4.4 and 4.9
+# Radian 1.8 driver building on 4.9

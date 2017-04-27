@@ -1,6 +1,7 @@
 /*****************************************************************************
  *
  *  Copyright (C) 2009-2013  Integrated Device Technology, Inc.
+ *  Copyright (C) 2014-2016  Radian Memory Systems, Inc.
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -73,7 +74,6 @@
 #define NVME_IOCTL_EVENT            _IO('N', 0x46)
 #define NVME_IOCTL_SET_CACHE        _IO('N', 0x47)
 
-#define NVME_RMS_IOCTL_IO_CMD_ASYNC _IOWR('N', 0x48, struct usr_io2)
 
 /**
  * User Pass through data structure definition.
@@ -93,15 +93,6 @@ struct usr_io {
 	__u32	meta_length;		/* meta data length */
     __u64   addr;			/* data address */
     __u64   meta_addr;		/* meta data address */
-};
-
-/*
- * RMS extension for async io cmd
- */
-struct usr_io2 {
-	struct usr_io uio;
-	__u64  async_opaque;
-	__u32  eventfd;
 };
 
 

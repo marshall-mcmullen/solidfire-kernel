@@ -1,6 +1,7 @@
 /*****************************************************************************;
  *
  * Copyright (C) 2009-2013  Integrated Device Technology, Inc.
+ * Copyright (C) 2014-2016  Radian Memory Systems, Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -71,11 +72,108 @@
 #define FALSE 0
 #endif
 
+/*
+ * Multiversion compilation assistance...
+ */
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,0,0))
+#define HAVE_ENDIO2
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0))
+#undef HAVE_ENDIO2
+#undef HAVE_BLKMQ
+#define HAVE_BLK_QUEUE_SPLIT
+#endif
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,4,0))
+#undef HAVE_ENDIO2
+#define HAVE_BLK_QUEUE_SPLIT
+#define HAVE_BLKMQ
+#endif
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0))
+#define HAVE_BLK_QUEUE_SPLIT
+#define HAVE_BLKMQ
+#define HAVE_NEW_GUP
+#endif
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,8,0))
+#define HAVE_BLK_QUEUE_SPLIT
+#define HAVE_BLKMQ
+#define HAVE_NEW_GUP
+#define HAVE_BIO_OPF
+#define HAVE_REQOP
+#endif
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,9,0))
+/* current */
+#define HAVE_BLK_QUEUE_SPLIT
+#define HAVE_BLKMQ
+#define HAVE_NEW_GUP
+#define HAVE_BIO_OPF
+#define HAVE_REQOP
+#define HAVE_NEW_GUP2
+#endif
+
+#endif
+
+/* implementation variations... */
+#ifdef HAVE_ENDIO2
+#define BIO_ENDIO(bio, err)	bio_endio(bio, err)
+#else
+#define BIO_ENDIO(bio, err)	do { (bio)->bi_error = (err); bio_endio(bio); } while(0)
+#endif
+
+#ifdef HAVE_BLKMQ
+#define MR_RETTYPE blk_qc_t
+#define MR_RETURN(x) (x)
+#else
+#define MR_RETTYPE void
+#define MR_RETURN(x)
+#endif
+
+#ifdef HAVE_NEW_GUP
+//#define GET_USER_PAGES get_user_pages_remote
+#define GET_USER_PAGES(start, nr_pages, write, force, pages, vmas) \
+    get_user_pages((start), (nr_pages), (write), (force), (pages), (vmas))
+#else
+//#define GET_USER_PAGES get_user_pages
+#define GET_USER_PAGES(c, d, e, f, g, h) \
+    get_user_pages(current, current->mm, (c), (d), (e), (f), (g), (h))
+#endif
+
+#ifdef HAVE_NEW_GUP2
+#define GET_USER_PAGES2(start, nr_pages, gup_flags, pages, vmas) \
+  get_user_pages((start), (nr_pages), (gup_flags), (pages), (vmas))
+#else
+#define GET_USER_PAGES2(start, nr_pages, gup_flags, pages, vmas) \
+  GET_USER_PAGES(start, nr_pages, (gup_flags)&FOLL_WRITE, (gup_flags)&FOLL_FORCE, (pages), (vmas))
+#endif
+
+#ifdef HAVE_BIO_OPF
+#define BIO_OPF_TYPE long
+#define BIO_OPF(bio) ((bio)->bi_opf)
+#define BIO_IS_READ(bio) (bio_op(bio) == REQ_OP_READ)
+#else
+#define BIO_OPF_TYPE long
+#define BIO_OPF(bio) ((bio)->bi_rw)
+/* original code assumes? that !(bio_rw == 0) implies write...!?? */
+#define BIO_IS_READ(bio) (!bio_rw(bio))
+#endif
+
+#ifdef HAVE_REQOP
+#else
+#define REQ_OP_WRITE			REQ_WRITE
+#define REQ_OP_DISCARD			REQ_DISCARD
+#define REQ_OP_FLUSH			REQ_FLUSH
+#define QUEUE_FLAG_SECERASE		QUEUE_FLAG_SECDISCARD
+#endif
+
 /**
  * Conditional compile flags
  */
 #define USE_NS_ATTR 	0
-#define NVME_DISCARD		1
+
+#define NVME_DISCARD		0
 #define DO_IO_STAT  		0
 #define SEND_AEN		1
 #define FORCE_ERROR 	0
@@ -86,6 +184,7 @@
 #define FREQ_FORCE_TIMEOUT  100000
 
 #define IDT_APP_TAG 	0x4944  /* "ID" */
+
 
 /*
  * Attempt to reset hardware on certain paths
@@ -141,7 +240,7 @@ static int 	reset_card_on_timeout = 0;
 static int  nvme_idle_count = 0;
 int nvme_dbg = NVME_DEBUG_ALL;
 #endif
-#define NVME_REL	"1.7"
+#define NVME_REL	"1.8rc2"
 
 /**
  * For Instance allocation.
@@ -587,13 +686,13 @@ hot_remove_store(struct device *class_dev, struct device_attribute *attr,
 					class_dev, (u64)count, buf);
 	if (!dev)
 		return (-EINVAL);
-		if (1 != sscanf(buf, "%d", &ns_id)) {
+	if (1 != sscanf(buf, "%d", &ns_id)) {
 		EPRINT("Invalid input %s\n", buf);
-			return (-EINVAL);
+		return (-EINVAL);
 	}
 	DPRINT1("Namespace %d\n", ns_id);
 	if ((status = nvme_offline_ns(dev, ns_id)))
-			return status;
+		return status;
 	return count;
 }
 
@@ -660,13 +759,13 @@ hot_add_store(struct device *class_dev, struct device_attribute *attr,
 					dev, (u64)count, buf);
 	if (!dev)
 		return (-EINVAL);
-		if (sscanf(buf, "%d", &ns_id) != 1) {
+	if (sscanf(buf, "%d", &ns_id) != 1) {
 		EPRINT("Invalid input %s\n", buf);
-			return (-EINVAL);
+		return (-EINVAL);
 	}
 	DPRINT1("Namespace %d\n", ns_id);
 	if ((status = nvme_online_ns(dev, ns_id)))
-			return status;
+		return status;
 	return count;
 }
 
@@ -794,7 +893,7 @@ static void nvme_process_prps(struct queue_info *qinfo,
 					struct cmd_info *cmd_info);
 static void nvme_process_cong(struct queue_info *qinfo);
 static void nvme_process_work(struct work_struct *work);
-static blk_qc_t nvme_make_request(struct request_queue *q, struct bio *bio);
+static MR_RETTYPE nvme_make_request(struct request_queue *q, struct bio *bio);
 void nvme_put_cmd(struct queue_info *qinfo, struct cmd_info *cmd_info);
 static int nvme_request_queues(struct nvme_dev *dev, u32 *nr_io_queues);
 static struct cmd_info * nvme_get_cmd(struct queue_info *qinfo);
@@ -823,15 +922,20 @@ static void nvme_report_error(struct nvme_dev *dev, void *log);
 static pci_ers_result_t
 nvme_error_detected(struct pci_dev *pci_dev, enum pci_channel_state error)
 {
-	struct nvme_dev *dev = (struct nvme_dev *)pci_get_drvdata(pci_dev);
 	int result = PCI_ERS_RESULT_RECOVERED;
 
 	printk(KERN_INFO "PCIe error detected ...... %s %s",
 			nvme_pci_id(pci_dev), nvme_pci_info(pci_dev));
-	if (dev) {
-		if (nvme_hw_reset(dev))
-		result = PCI_ERS_RESULT_NEED_RESET;
+
+#ifdef CONFIG_HW_RESET_ON_ERR
+	{
+		struct nvme_dev *dev = (struct nvme_dev *)pci_get_drvdata(pci_dev);
+		if (dev) {
+			if (nvme_hw_reset(dev))
+			result = PCI_ERS_RESULT_NEED_RESET;
+		}
 	}
+#endif
 	return (result);
 }
 
@@ -1015,21 +1119,11 @@ nvme_shutdown(struct pci_dev *pci_dev)
 	dev->unlock_func(&dev->lock, &dev->lock_flags);
 }
 
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-
-static DEFINE_PCI_DEVICE_TABLE(nvme_id_table) = {
-	{PCI_DEVICE_CLASS(0x010802, 0xffffff)},
-	{ 0, }
-};
-
-#else
 
 static const struct pci_device_id nvme_id_table[] = {
 	{PCI_DEVICE_CLASS(0x010802, 0xffffff)},
 	{ 0, }
 };
-
-#endif
 
 MODULE_DEVICE_TABLE(pci, nvme_id_table);
 
@@ -1075,7 +1169,7 @@ nvme_open_disk(struct block_device *bdev, fmode_t mode)
 	struct nvme_dev *dev = ns->dev;
 	int result = 0;
 
-	if (mode & FMODE_WRITE) {
+	if (mode & (FMODE_READ | FMODE_WRITE)) {
 		result = nvme_rms_wait_charge(dev, mode & FMODE_NDELAY);
 		if (result)
 			return result;
@@ -1201,13 +1295,7 @@ nvme_map_user_pages(struct nvme_dev *dev, struct usr_io *uio,
 	DPRINT8("offset %d, page count %d, pages %p\n", offset, count, pages);
 
 	down_read(&current->mm->mmap_sem);
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-	status = get_user_pages(current, current->mm, uio->addr & PAGE_MASK,
-				count, 1, 0, pages, NULL);
-#else
-	status = get_user_pages(uio->addr & PAGE_MASK, count, FOLL_WRITE, pages, NULL);
-
-#endif
+	status = GET_USER_PAGES2(uio->addr & PAGE_MASK, count, FOLL_WRITE, pages, NULL);
 	up_read(&current->mm->mmap_sem);
 	DPRINT8("user pages count %d, status 0x%x\n", count, status);
 
@@ -1369,6 +1457,7 @@ nvme_validate_uio(struct nvme_dev *dev, void __user *p, struct usr_io *uio,
 	return 0;
 }
 
+
 /**
  * @brief This function updates user uio data structure.
  *  	This function is called by pass-through function to update
@@ -1472,7 +1561,7 @@ nvme_allowed_admin_cmd(struct nvme_dev *dev, struct usr_io *uio)
 					uio->meta_length, uio->cmd.cmd.vendorSpecific.metaNumDW >> 2);
 				return -ENOTTY;
 			}
-			rms200_allowed_admin_cmd(dev, uio);
+			rms_allowed_admin_cmd(dev, uio);
 		}
 		return 0;
 	}
@@ -1561,7 +1650,8 @@ nvme_admin_passthru(struct nvme_dev *dev, void __user *p)
 	DPRINT9("command completion result 0x%x, uio->status %d\n",
 					result, uio->status);
 
-	nvme_unmap_user_pages(dev, uio, cmd_info);
+	if (uio->length)
+		nvme_unmap_user_pages(dev, uio, cmd_info);
 	result = nvme_put_uio(puio, uio, cmd_info);
 out:
 	qinfo->lock_func(&qinfo->lock, &qinfo->lock_flags);
@@ -1580,6 +1670,7 @@ out:
 		return (uio->status);
 	return result;
 }
+
 
 /**
  * @brief This function Process user IO request.
@@ -1643,6 +1734,7 @@ nvme_io_passthru(struct nvme_dev *dev, struct ns_info *ns, void __user *p)
 	cmd_info->type  	= ADMIN_CONTEXT;
 	cmd_info->count 	= uio->length;
 
+
 	cmd_info->nvme_cmd.header.namespaceID = ns ? ns->id : -1;
 	cmd_info->nvme_cmd.header.cmdID = cmd_info->cmd_id;
 	DPRINT10("command ID %d\n", cmd_info->cmd_id);
@@ -1650,19 +1742,58 @@ nvme_io_passthru(struct nvme_dev *dev, struct ns_info *ns, void __user *p)
 	/**
 	 * Map user space and Create an scatter gather list of user data.
 	 */
-	if ((result = nvme_map_user_pages(dev, uio, cmd_info)) < 0)
-		goto out;
-
 	DPRINT10("mapped user pages %p\n", cmd_info);
 
-	nvme_process_prps(qinfo, cmd_info);
+	{
+		int rc;
+
+		/* Fix possible unalignment of user-data at uio->addr... by copying into
+		 *   our pre-allocated prp bufs...
+		 */
+		if (uio->length <= PAGE_SIZE) {
+			//printk(KERN_INFO "wa %p %x\n", (void*)uio->addr, uio->length);
+			cmd_info->nvme_cmd.header.prp[0].addr = cmd_info->prp_phy;
+			cmd_info->nvme_cmd.header.prp[1].addr = 0;
+
+			if (0)
+				printk(KERN_INFO "My No List PRP1 %016llx, PRP2 %016llx %d %d\n",
+				   cmd_info->nvme_cmd.header.prp[0].addr,
+				   cmd_info->nvme_cmd.header.prp[1].addr,
+				   cmd_info->count, uio->length);
+
+			if ((rc = copy_from_user(cmd_info->prps, (void *)uio->addr,
+									 uio->length)) < 0) {
+				return -EFAULT;
+			}
+		}
+		else {
+			//printk(KERN_INFO "iop: wn length: %d\n", uio->length);
+			if ((result = nvme_map_user_pages(dev, uio, cmd_info)) < 0)
+				goto out;
+			nvme_process_prps(qinfo, cmd_info);
+		}
+	}
 
 	result = nvme_wait_cmd(qinfo, cmd_info, uio->timeout * HZ);
 	uio->status = result;
 	DPRINT10("command completion result 0x%x, uio->status 0x%x\n",
 					result, uio->status);
 
-	nvme_unmap_user_pages(dev, uio, cmd_info);
+	if (uio->length <= PAGE_SIZE) {
+		if (uio->direction == XFER_FROM_DEV) {
+			int rc;
+
+			/*
+			 * Need to copy from our private buffer back to uio->addr...
+			 */
+			if ((rc = copy_to_user((void*) uio->addr, cmd_info->prps,
+								   uio->length)) < 0) {
+				return -EFAULT;
+			}
+		}
+	}
+	else
+		nvme_unmap_user_pages(dev, uio, cmd_info);
 
 	tmp_result = nvme_put_uio(puio, uio, cmd_info);
 	if (result == 0) {
@@ -1790,6 +1921,9 @@ nvme_online_ns(struct nvme_dev *dev, int ns_id)
 		}
 	}
 	dev->unlock_func(&dev->lock, &dev->lock_flags);
+	if (result != 0) {
+		return result;
+	}
 	result = nvme_get_ctrl_identify(dev);
 	if (result) {
 		EPRINT("Failed to retrieve Identify data.\n");
@@ -1798,26 +1932,24 @@ nvme_online_ns(struct nvme_dev *dev, int ns_id)
 	dev->ns_count = dev->identify->numNmspc;
 	rms_check_ns_count(dev);
 
-	if (!ns) {
-		DPRINT2("**** New Namespace %d discovered *******\n", ns_id);
-		if (!(ns = nvme_alloc_ns(dev, ns_id, 1))) {
-			EPRINT("Failed to allocate NS information structure.\n");
-			result = -ENOMEM;
-		}
+	DPRINT2("**** New Namespace %d discovered *******\n", ns_id);
+	if (!(ns = nvme_alloc_ns(dev, ns_id, 1))) {
+		EPRINT("Failed to allocate NS information structure.\n");
+		result = -ENOMEM;
+	}
 #if USE_NS_ATTR
-		/*
-		 * Get Namespace attributes
-		 */
-		if (nvme_ns_attr(dev, ns_id, ns)) {
-			EPRINT("Failed get NS attributes.\n");
-			result = -EINVAL;
-		}
+	/*
+	 * Get Namespace attributes
+	 */
+	if (nvme_ns_attr(dev, ns_id, ns)) {
+		EPRINT("Failed get NS attributes.\n");
+		result = -EINVAL;
+	}
 #endif
-		if (result == 0) {
-			result = nvme_attach_ns(dev, ns, 1);
-			if (result) {
-				EPRINT("Failed to create disk device for NS %d\n", ns->id);
-			}
+	if (result == 0) {
+		result = nvme_attach_ns(dev, ns, 1);
+		if (result) {
+			EPRINT("Failed to create disk device for NS %d\n", ns->id);
 		}
 	}
 	return (result);
@@ -1874,7 +2006,6 @@ nvme_ioctl(struct block_device *bdev, fmode_t mode, uint cmd, ulong arg)
 	case NVME_GET_VERSION_NUM:
 	case NVME_IOCTL_IO_CMD:
 	case NVME_IOCTL_ADMIN_CMD:
-	case NVME_RMS_IOCTL_IO_CMD_ASYNC:
 		break;
 
 	case BLKFLSBUF:
@@ -1949,6 +2080,7 @@ nvme_ioctl_common(struct nvme_dev *dev, struct ns_info *ns,
 			return (-EFAULT);
 		return (nvme_online_ns(dev, ns_id));
 
+
 	default:
 		break;
 	}
@@ -1974,11 +2106,7 @@ nvme_disk_stat_cong(struct nvme_dev *dev, struct ns_info *ns, struct bio *bio)
 
 		if (!nvme_do_io_stat)
 			return;
-#if ( (LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-		if (bio->bi_rw & BIO_REQ_DISCARD)
-#else
-		if (bio_op(bio) & BIO_REQ_DISCARD)
-#endif
+		if (BIO_OPF(bio) & REQ_OP_DISCARD)
 			return;
 
 		cpu = part_stat_lock();
@@ -2024,11 +2152,7 @@ nvme_disk_stat_in(struct nvme_dev *dev, struct cmd_info *cmd_info,
 
 		if (!nvme_do_io_stat)
 			return;
-#if ( (LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-		if (bio->bi_rw & BIO_REQ_DISCARD)
-#else
-		if (bio_op(bio) & BIO_REQ_DISCARD)
-#endif
+		if (BIO_OPF(bio) & REQ_OP_DISCARD)
 			return;
 
 		cpu = part_stat_lock();
@@ -2070,11 +2194,7 @@ nvme_disk_stat_completion(struct nvme_dev *dev, struct cmd_info *cmd_info)
 
 		if (!nvme_do_io_stat)
 		return;
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-	if (!bio || (bio->bi_rw & BIO_REQ_DISCARD))
-#else
-	if (!bio || (bio_op(bio) & BIO_REQ_DISCARD))
-#endif
+	if (!bio || (BIO_OPF(bio) & REQ_OP_DISCARD))
 			return;
 
 		cpu = part_stat_lock();
@@ -2114,11 +2234,7 @@ nvme_disk_stat_iodone(struct nvme_dev *dev, struct cmd_info *cmd_info)
 		 */
 		if (!nvme_do_io_stat)
 		return;
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-		if (!bio || (bio->bi_rw & BIO_REQ_DISCARD))
-#else
-		if (!bio || (bio_op(bio) & BIO_REQ_DISCARD))
-#endif
+		if (!bio || (BIO_OPF(bio) & REQ_OP_DISCARD))
 			return;
 
 		cpu = part_stat_lock();
@@ -2526,6 +2642,7 @@ nvme_wait_cmd(struct queue_info *qinfo, struct cmd_info *cmd_info, int timeout)
 #endif
 	int result;
 
+
 	DPRINT3("cmd_info %p, timeout %d\n", cmd_info, timeout);
 	qinfo->lock_func(&qinfo->lock, &qinfo->lock_flags);
 	if (nvme_send_cmd(qinfo->sub_queue, cmd_info)) {
@@ -2668,11 +2785,9 @@ nvme_stalled_command(struct work_struct *work)
 				}
 				qinfo->nr_req--;
 #if FORCE_TIMEOUT
-				bio->bi_error = 0;
-				bio_endio(bio);  	/* allow test to continue */
+				BIO_ENDIO(bio, 0);  	/* allow test to continue */
 #else
-				bio->bi_error = -ETIME;
-				bio_endio(bio);
+				BIO_ENDIO(bio, -ETIME);
 #endif
 				nvme_disk_stat_iodone(dev, cmd_info);
 				cmd_info->req = NULL;
@@ -2726,6 +2841,7 @@ nvme_timeout(ulong arg)
 		goto skip_timer;
 
 	dev->wq_done = 0;
+
 
 	for (i = 1; i <= dev->que_count; i++) {
 		qinfo = dev->que_list[i];
@@ -3330,7 +3446,7 @@ nvme_cache_enable(struct nvme_dev *dev, u16 enable)
 
 
 char	*context_type_string[] = {
-		"Reserved",
+		"Reserved-0",
 		"Admin",
 		"IO",
 		"IOCTL",
@@ -3338,14 +3454,14 @@ char	*context_type_string[] = {
 		"Log",
 		"Error Log",
 		"Abort",
-		"Reserved",
-		"Reserved",
-		"Reserved",
-		"Reserved",
-		"Reserved",
-		"Reserved",
-		"Reserved",
-		"Reserved"
+		"Reserved-8",
+		"Reserved-9",
+		"Reserved-A",
+		"Reserved-B",
+		"Reserved-C",
+		"Reserved-D",
+		"Reserved-E",
+		"Reserved-F"
 	};
 
 char	*err_type_string[] = {
@@ -3473,8 +3589,7 @@ nvme_flush_cong(struct queue_info *qinfo, struct ns_info *ns, int status)
 
 		DPRINT4("Flushing bio %p\n", bio);
 
-		bio->bi_error = status;
-		bio_endio(bio);
+		BIO_ENDIO(bio, status);
 		qinfo->nrf_sq_cong++;
 	}
 }
@@ -3555,8 +3670,7 @@ nvme_flush_queue(struct queue_info *qinfo, struct ns_info *ns, int status)
 			if (status) {
 				DPRINT4("qinfo %p [%d], Aborting bio %p, status %d\n",
 						qinfo, qinfo->id, bio, status);
-				bio->bi_error = status;
-				bio_endio(bio);
+				BIO_ENDIO(bio, status);
 				nvme_disk_stat_iodone(dev, cmd_info);
 				qinfo->nrf_fq++;
 				qinfo->nr_req--;
@@ -3566,6 +3680,7 @@ nvme_flush_queue(struct queue_info *qinfo, struct ns_info *ns, int status)
 				bio_list_add_head(&qinfo->sq_cong, bio);
 			}
 		}
+
 		cmd_info->status = 0;
 		qinfo->timeout[cmd_info->timeout_id]--;
 		if (cmd_info->sg_count) {
@@ -3974,7 +4089,9 @@ nvme_attach_ns(struct nvme_dev *dev, struct ns_info *ns, int lock)
 	 * BIO discard request depend upon controller identify data.
 	 */
 	if (dev->nvmCmdSupport & (1 << 2)) {
-		ns->queue->queue_flags |= (1 << QUEUE_FLAG_DISCARD);
+		ns->queue->queue_flags |= (
+					   (1 << QUEUE_FLAG_SECERASE) |
+					   (1 << QUEUE_FLAG_DISCARD));
 	}
 #endif
 	DPRINT2("NS [%d], queue %p, queue flags 0x%0lx\n", ns->id, ns->queue,
@@ -4032,7 +4149,7 @@ nvme_attach_ns(struct nvme_dev *dev, struct ns_info *ns, int lock)
 	ns->disk->private_data  = ns;
 	ns->disk->queue 		= ns->queue;
 	ns->disk->fops  		= &nvme_fops;
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4,8,0))
 	ns->disk->driverfs_dev  = &dev->pci_dev->dev;
 #endif
 
@@ -4132,7 +4249,7 @@ nvme_alloc_ns(struct nvme_dev *dev, int ns_id, int lock)
 		DPRINT2("supported LBA format 0x%08x\n",
 					*(u32 *)&ident->lbaFmtSup[i]);
 	}
-	lba_format = *(u32 *)&ident->lbaFmtSup[ident->fmtLbaSize & 0x0F];
+	lba_format   = *(u32 *)&ident->lbaFmtSup[ident->fmtLbaSize & 0x0F];
 	DPRINT2("LBA format 0x%08x\n", lba_format);
 	DPRINT2("Meta Data Capability 0x%02x\n", ident->metaDataCap);
 	DPRINT2("LBA Data Prot Cap/Set 0x%02x/0x%02x\n",
@@ -4713,11 +4830,7 @@ nvme_submit_request(struct queue_info *qinfo, struct ns_info *ns,
 		/**
 		 * process bio sglist and setup prp list.
 		 */
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-		if (unlikely(bio->bi_rw & BIO_REQ_DISCARD)) {
-#else
-		if (unlikely(bio_op(bio) & BIO_REQ_DISCARD)) {
-#endif
+		if (unlikely(BIO_OPF(bio) & REQ_OP_DISCARD)) {
 			DPRINT2("bio %p, ns %d, DISCARD size %u\n",
 						bio, ns->id, bio->bi_iter.bi_size);
 			length = bio->bi_iter.bi_size;
@@ -4729,29 +4842,19 @@ nvme_submit_request(struct queue_info *qinfo, struct ns_info *ns,
 			cmd->cmd.dataset.attribute = (1 << 2);  /* Deallocate */
 			/* force getting out of the loop */
 			base_info->cmd_bvec_iter.bi_size = 0;
-		} else
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-			if (unlikely(bio->bi_rw & BIO_REQ_FLUSH)) {
-#else
-			if (unlikely(bio_op(bio) & BIO_REQ_FLUSH)) {
-#endif
+		} else {
+			if (unlikely(BIO_OPF(bio) & REQ_OP_FLUSH)) {
 				DPRINT6("bio %p, ns %d, FLUSH cache...\n",bio, ns->id);
 				cmd->header.opCode = NVM_CMD_FLUSH;
 				cmd->header.namespaceID = cpu_to_le32(ns->id);
 				length = 0;
 			} else {
 				if (!bio->bi_iter.bi_size) {
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
 					EPRINT("bio %p, rw %lx, vcnt %d, len %d\n",
-						   bio, bio->bi_rw, bio->bi_vcnt, bio->bi_iter.bi_size);
-#else
-					EPRINT("bio %p, rw %x, vcnt %d, len %d\n",
-						   bio, bio->bi_opf, bio->bi_vcnt, bio->bi_iter.bi_size);
-#endif
+						   bio, (BIO_OPF_TYPE) BIO_OPF(bio), bio->bi_vcnt, bio->bi_iter.bi_size);
 					nvme_put_cmd(qinfo, cmd_info);
 					qinfo->nr_req--;
-					bio->bi_error = -EINVAL;
-					bio_endio(bio);
+					BIO_ENDIO(bio, -EINVAL);
 					status = 0;
 					break;
 				}
@@ -4781,64 +4884,49 @@ nvme_submit_request(struct queue_info *qinfo, struct ns_info *ns,
 						ns->id, cmd->cmd.read.numLBA,
 						cmd->cmd.read.startLBA,
 						ns->lba_shift);
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-				if (bio->bi_rw & BIO_REQ_RAHEAD)
-#else
-				if (bio_op(bio) & BIO_REQ_RAHEAD)
-#endif
+				if (BIO_OPF(bio) & BIO_REQ_RAHEAD)
 					cmd->cmd.read.datasetMgmnt = 7;
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-				if (bio->bi_rw & (BIO_REQ_FAILFAST_DEV | BIO_REQ_RAHEAD))
-#else
-				if (bio_op(bio) & (BIO_REQ_FAILFAST_DEV | BIO_REQ_RAHEAD))
-#endif
+				if (BIO_OPF(bio) & (BIO_REQ_FAILFAST_DEV | BIO_REQ_RAHEAD))
 					cmd->cmd.read.limitedRetry = 1;
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-				if (bio->bi_rw & BIO_REQ_FUA)
-#else
-				if (bio_op(bio) & BIO_REQ_FUA)
-#endif
+				if (BIO_OPF(bio) & BIO_REQ_FUA)
 					cmd->cmd.read.forceUnitAccess = 1;
 			}
-			cmd->header.cmdID = cmd_info->cmd_id;
-			cmd_info->timeout_id = dev->timeout_id;
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-			if (!(bio->bi_rw & BIO_REQ_DISCARD)) {
-#else
-			if (!(bio_op(bio) & BIO_REQ_DISCARD)) {
-#endif
-				qinfo->timeout[cmd_info->timeout_id]++;
-			}
+		}
+		cmd->header.cmdID = cmd_info->cmd_id;
+		cmd_info->timeout_id = dev->timeout_id;
+		if (!(BIO_OPF(bio) & REQ_OP_DISCARD)) {
+			qinfo->timeout[cmd_info->timeout_id]++;
+		}
 #if DO_IO_STAT
-			cmd_info->start_time = jiffies;
+		cmd_info->start_time = jiffies;
 #endif
-			cmd_info->type = BIO_CONTEXT;
-			cmd_info->status = -1;
-			/**
-			 * Update commands sent for request.
-			 */
-			base_info->cmd_count++;
-			base_info->req_length += cmd_info->count;
+		cmd_info->type = BIO_CONTEXT;
+		cmd_info->status = -1;
+		/**
+		 * Update commands sent for request.
+		 */
+		base_info->cmd_count++;
+		base_info->req_length += cmd_info->count;
 
-			DPRINT6("Sub queue[%d] doorbell %p->[%d]\n", sqinfo->id,
-					sqinfo->doorbell, sqinfo->tail);
+		DPRINT6("Sub queue[%d] doorbell %p->[%d]\n", sqinfo->id,
+				sqinfo->doorbell, sqinfo->tail);
 
 #ifdef NVME_DEBUG
-			if (nvme_dbg & NVME_DEBUG_DUMP) {
-				int i;
-				u32 *ptr;
-				ptr = (u32 *)cmd;
-				for (i=0; i<sizeof(struct nvme_cmd)/sizeof(u32); i += 4) {
-					DPRINT("%02x: %08x %08x %08x %08x\n", i,
-						   ptr[i], ptr[i+1], ptr[i+2], ptr[i+3]);
-				}
+		if (nvme_dbg & NVME_DEBUG_DUMP) {
+			int i;
+			u32 *ptr;
+			ptr = (u32 *)cmd;
+			for (i=0; i<sizeof(struct nvme_cmd)/sizeof(u32); i += 4) {
+				DPRINT("%02x: %08x %08x %08x %08x\n", i,
+					   ptr[i], ptr[i+1], ptr[i+2], ptr[i+3]);
 			}
+		}
 #endif
-			sqinfo->tail++;
-			if (sqinfo->tail >= sqinfo->qsize)
-				sqinfo->tail = 0;
-			writel(sqinfo->tail, sqinfo->doorbell);
-			sqinfo->entries--;
+		sqinfo->tail++;
+		if (sqinfo->tail >= sqinfo->qsize)
+			sqinfo->tail = 0;
+		writel(sqinfo->tail, sqinfo->doorbell);
+		sqinfo->entries--;
 	} while (base_info->cmd_bvec_iter.bi_size);
 
 	/**
@@ -4902,21 +4990,38 @@ nvme_process_cong(struct queue_info *qinfo)
  * @brief This function translates error code and logs the error.
  *
  * @param[in] struct nvme_dev *dev pointer to NVME device data context.
- * @param[in] struct cq_entry *cq_entry optional pointer to cq_entry
+ * @param[in] struct cq_entry *cq_entry optional pointer to
+ *  	 cq_entry
+ * @param[in] struct cmd_info *cmd_info pointer to cmd_info
  *
  * @return void None.
  */
 static void
-nvme_show_error(struct nvme_dev *dev, struct cq_entry *cq_entry)
+nvme_show_error(struct nvme_dev *dev, struct cq_entry *cq_entry,
+				struct cmd_info *cmd_info)
 {
 	char **str;
 	u32   sts;
+	char out_str[256];
+
+	sprintf(out_str, "Error ctx: %s, ",
+			context_type_string[cmd_info->type & 0x0F]);
+	if (cmd_info->type == BIO_CONTEXT) {
+		struct bio *bio = cmd_info->req;
+		sprintf(&out_str[strlen(out_str)], "ns %d blk %lld "\
+				"(0x%llx) cnt %d, ",
+				cmd_info->ns->id,
+				(u64)bio->bi_iter.bi_sector,
+				(u64)bio->bi_iter.bi_sector,
+				bio->bi_iter.bi_size >> 9);
+	}
 
 	if (err_type_string[cq_entry->SCT]) {
-		EPRINT("Error type [%02x]: \"%s\"\n",
+		sprintf(&out_str[strlen(out_str)], "Type [%02x]: \"%s\"",
 				cq_entry->SCT, err_type_string[cq_entry->SCT]);
 	} else {
-		EPRINT("Error type [%02x] \"unknown\"\n", cq_entry->SCT);
+		sprintf(&out_str[strlen(out_str)], "Type [%02x] \"unk\"",
+				cq_entry->SCT);
 	}
 	sts = cq_entry->SC;
 
@@ -4925,7 +5030,9 @@ nvme_show_error(struct nvme_dev *dev, struct cq_entry *cq_entry)
 		str = err_tbl[(cq_entry->SCT << 1)+1];
 		sts -= 0x80;
 	}
-	EPRINT("Error status [%04x]: \"%s\"\n", cq_entry->SC, str[sts]);
+	sprintf(&out_str[strlen(out_str)], " Status [%04x]: \"%s\"\n",
+			cq_entry->SC, str[sts]);
+	EPRINT("%s", out_str);
 }
 
 /**
@@ -4953,18 +5060,10 @@ nvme_log_err(struct queue_info *qinfo, struct cmd_info *cmd_info,
 
 		case BIO_CONTEXT:   /* Normal Error log */
 		{
-			struct ns_info *ns = cmd_info->ns;
-
 			if (!cq_entry->SC)
 				break;
 
-			EPRINT("IO Error [%x:%x] namespace %d, block %lld, "
-				   "count %d\n",
-				   cq_entry->SCT, cq_entry->SC, ns->id,
-				(u64)cmd_info->cmd_bvec_iter.bi_sector,
-				cmd_info->count >> (ns->lba_shift - 9));
-
-			nvme_show_error(dev, cq_entry);
+			nvme_show_error(dev, cq_entry, cmd_info);
 			break;
 		}
 
@@ -4981,11 +5080,7 @@ nvme_log_err(struct queue_info *qinfo, struct cmd_info *cmd_info,
 			if (!cq_entry->SC)
 				break;
 
-			EPRINT("%s request error completion [%x:%x]\n",
-				   context_type_string[cmd_info->type & 0x0F],
-				   cq_entry->SCT, cq_entry->SC);
-
-			nvme_show_error(dev, cq_entry);
+			nvme_show_error(dev, cq_entry, cmd_info);
 			break;
 		}
 	}
@@ -5145,7 +5240,7 @@ nvme_process_cq(struct queue_info *qinfo)
 		if ((cq_entry->SCT == 2) && ((cq_entry->SC == 0x82) ||
 				(cq_entry->SC == 0x83) || (cq_entry->SC == 0x84))) {
 #ifdef NVME_DEBUG
-		nvme_show_error(dev, cq_entry);
+		nvme_show_error(dev, cq_entry, cmd_info);
 #endif
 			cq_entry->SC = cq_entry->SCT = 0;
 			cmd_info->cmd_status = status = 0;
@@ -5158,7 +5253,7 @@ nvme_process_cq(struct queue_info *qinfo)
 		if (unlikely(status)) {
 
 #ifdef NVME_DEBUG
-			nvme_show_error(dev, cq_entry);
+			nvme_show_error(dev, cq_entry, cmd_info);
 #endif
 
 			if (cq_entry->more) {
@@ -5204,11 +5299,7 @@ nvme_process_cq(struct queue_info *qinfo)
 				bio = cmd_info->req;
 
 				if ((cmd_info->cmd_retries < MAX_RETRY) &&
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-					!(bio->bi_rw & BIO_REQ_WRITE)) {
-#else
-					!(bio_op(bio) & BIO_REQ_WRITE)) {
-#endif
+					!(BIO_OPF(bio) & REQ_OP_WRITE)) {
 
 					DPRINT("Retrying BIO %p, vcnt %d, idx %d\n",
 						   bio, bio->bi_vcnt, bio->bi_iter.bi_idx);
@@ -5273,8 +5364,7 @@ nvme_process_cq(struct queue_info *qinfo)
 
 				qinfo->nr_req--;
 				nvme_disk_stat_iodone(dev, cmd_info);
-				bio->bi_error = (!cmd_info->cmd_status) ? 0 : -EIO;
-				bio_endio(bio);
+				BIO_ENDIO(bio, (!cmd_info->cmd_status) ? 0 : -EIO);
 
 				if (cmd_info->sg_count) {
 					dma_unmap_sg(dev->dma_dev, cmd_info->sg_list,
@@ -5416,7 +5506,7 @@ get_nvmeq(struct nvme_dev *dev)
  * @note return value of non-zero would mean that we were a stacking driver.
  * @note make_request must always succeed.
  */
-static blk_qc_t
+static MR_RETTYPE
 nvme_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct ns_info *	ns = q->queuedata;
@@ -5424,48 +5514,40 @@ nvme_make_request(struct request_queue *q, struct bio *bio)
 	struct queue_info * qinfo;
 	int result = -EBUSY;
 
+#ifdef HAVE_BLK_QUEUE_SPLIT
 	/*
 	 * The following call will ensure that the queue restrictions
 	 * are met on the request size.
 	 */
 	blk_queue_split(q, &bio, q->bio_split);
+#endif
 
 	dev = ns->dev;
 	if (!(ns->flags & NS_ONLINE)) {
 		DPRINT1("*** ERROR *** Received request while Offlined. ns_id %d\n",
 					ns->id);
-		bio->bi_error = -EBADF;
-		bio_endio(bio);
-		return BLK_QC_T_NONE;
+		BIO_ENDIO(bio, -EBADF);
+		return MR_RETURN(BLK_QC_T_NONE);
 	}
 	if (dev->state > NVME_STATE_RESET) {
 		DPRINT("****** Error Completion BIO %p, dev state %d\n",
 						bio, dev->state);
-		bio->bi_error = -EIO;
-		bio_endio(bio);
-		return BLK_QC_T_NONE;
+		BIO_ENDIO(bio, -EIO);
+		return MR_RETURN(BLK_QC_T_NONE);
 	}
 #if USE_NS_ATTR
 	if (unlikely((ns->flags & NS_READONLY) &&
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-				(bio->bi_rw & BIO_REQ_WRITE))) {
-#else
-				(bio_op(bio) & BIO_REQ_WRITE))) {
-#endif
+				(BIO_OPF(bio) & REQ_OP_WRITE))) {
 		DPRINT1("*** Rejecting WRITE request,  NS is READONLY. ns_id %d\n",
 								ns->id);
-		bio->bi_error = -EACCES;
-		bio_endio(bio);
-		return BLK_QC_T_NONE;
+		BIO_ENDIO(bio, -EACCES);
+		return MR_RETURN(BLK_QC_T_NONE);
 	}
 #endif
 
 
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(4,9,0) )
-	if ( bio_rw(bio) ) {
-#else
-	if ( bio_data_dir(bio) ) {
-#endif
+	/* this is slightly upside-down logic (based on original driver code) */
+	if (!BIO_IS_READ(bio)) {
 		dev->bytes_written += bio->bi_iter.bi_size;
 	} else {
 		dev->bytes_read += bio->bi_iter.bi_size;
@@ -5502,7 +5584,7 @@ nvme_make_request(struct request_queue *q, struct bio *bio)
 	/*checking for completions in order to reduce interrupt processing time*/
 	nvme_process_cq(qinfo);
 	qinfo->unlock_func(&qinfo->lock, &qinfo->lock_flags);
-	return BLK_QC_T_NONE;
+	return MR_RETURN(BLK_QC_T_NONE);
 }
 
 /**
@@ -5963,6 +6045,7 @@ queue_cons(struct nvme_dev *dev, int sqsize, int cqsize, int qid,
 	}
 
 	size = sizeof(struct nvme_prp) * max_prp_list;
+	size = max_t(size_t, size, PAGE_SIZE);	/* at least 4k */
 	qinfo->prp_pool = dma_pool_create("Queue prp list", dmadev,
 						size, size, 0);
 	DPRINT3("queue [%d] PRP pool %p, size 0x%x, align 0x%x\n",
@@ -6508,64 +6591,8 @@ nvme_process_log_page(struct queue_info *qinfo, struct cmd_info *cmd_info)
 #endif
 	nvme_report_log(qinfo, page_id, log_page);
 
-#if 0
-	/**
-	 * optional code to queue events to user application.
-	 */
-{
-	void *  buff;
-	struct event_info *event_info;
-
-	/**
-	 * This is is used to relay Events to user.
-	 * @todo - Must use event_lock instead of dev_lock.
-	 */
-	event_info = kzalloc(sizeof(*event_info), GFP_KERNEL);
-	if (!event_info) {
-		EPRINT("Memory allocation error for \"event_info\"\n");
-		return;
-	}
-
-	buff = kzalloc(MAX_PAGE_SIZE, GFP_KERNEL);
-	if (NULL == buff) {
-		EPRINT("Memory allocation error for \"page data\"\n");
-		kfree(event_info);
-		return;
-	}
-
-	/**
-	 * Copy event Page information and release DMA memory.
-	 * Specify event type and page information.
-	 * Add event to list of pending events.
-	 */
-	nvme_memcpy_64(buff, log_page, size/sizeof(u64));
-	event_info->buff = buff;
-	event_info->event_id = page_id;
-
-	INIT_LIST_HEAD(&event_info->list);
-	dev->lock_func(&dev->elock, &dev->elock_flags);
-	list_add_tail(&event_info->list, &dev->event_list);
-
-	/**
-	 * We can maintain last MAX_EVENTS entries in dev list.
-	 * All additional events are delete on FIFO basis.
-	 */
-	if (++dev->event_count > MAX_EVENTS) {
-		event_info = list_first_entry(&dev->event_list,
-							struct event_info, list);
-		DPRINT("Event Overflow, deleting %p %d\n",
-						event_info, event_info->event_id);
-		list_del(&event_info->list);
-		kfree(event_info->buff);
-		kfree(event_info);
-	}
-	DPRINT("Signaling Event pending..... %p\n", &dev->event_wait);
-	wake_up(&dev->event_wait);
-	dev->unlock_func(&dev->elock, &dev->elock_flags);
-}
-#endif
 	if((GLP_ID_DIALOG == page_id) || (GLP_ID_AEN_TRIGGER == page_id))
-		rms200_prepare_and_send_page(page_id, size, log_page);
+		rms_prepare_and_send_page(page_id, size, log_page);
 	return page_id;
 }
 
@@ -7372,19 +7399,21 @@ nvme_thread(void *data)
 			DPRINT("thread_flags 0x%0x\n",  dev->thread_flags);
 #endif
 
-		if (dev->thread_flags & THREAD_STOP)
+		if (dev->thread_flags & THREAD_STOP) {
 			break;
+		}
 
 		dev->lock_func(&dev->lock, &dev->lock_flags);
 		if (dev->thread_flags & THREAD_RESTART) {
-		dev->thread_flags = 0;
-		if (dev->state <= NVME_STATE_SUSPEND) {
+			dev->thread_flags = 0;
+			if (dev->state <= NVME_STATE_SUSPEND) {
+				EPRINT("nvme_thread restart\n");
 				dev->unlock_func(&dev->lock, &dev->lock_flags);
-			nvme_hw_reset(dev);
-			continue;
-		}
+				nvme_hw_reset(dev);
+				continue;
+			}
 			dev->unlock_func(&dev->lock, &dev->lock_flags);
-		continue;
+			continue;
 		}
 
 #ifdef NVME_DEBUG
@@ -7392,8 +7421,8 @@ nvme_thread(void *data)
 		 * show stalled queues.
 			 */
 		if (nvme_idle_count++ > 120) {
-		struct queue_info *dqinfo;
-		int i;
+			struct queue_info *dqinfo;
+			int i;
 
 			for (i = 1; i <= dev->que_count; i++) {
 
@@ -7401,14 +7430,14 @@ nvme_thread(void *data)
 				if (! dqinfo)
 				continue;
 
-			if (nvme_dbg & NVME_DEBUG_DUMP_Q) {
-				dqinfo->lock_func(&dqinfo->lock, &dqinfo->lock_flags);
-			DPRINT("Q flags 0x%x sub-entries %d, max_io_req %d\n",
-				dqinfo->flags,
-				dqinfo->sub_queue->entries, max_io_request);
-				nvme_dump_list(dqinfo);
-				dqinfo->unlock_func(&dqinfo->lock, &dqinfo->lock_flags);
-			}
+				if (nvme_dbg & NVME_DEBUG_DUMP_Q) {
+					dqinfo->lock_func(&dqinfo->lock, &dqinfo->lock_flags);
+					DPRINT("Q flags 0x%x sub-entries %d, max_io_req %d\n",
+						dqinfo->flags,
+						dqinfo->sub_queue->entries, max_io_request);
+						nvme_dump_list(dqinfo);
+						dqinfo->unlock_func(&dqinfo->lock, &dqinfo->lock_flags);
+				}
 			}
 			nvme_idle_count = 0;
 		}
@@ -7561,6 +7590,7 @@ nvme_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	dev->timeout_id = 0;
 	dev->major  = nvme_major;
 
+
 	DPRINT1("Dev %p [Major %d/%d] pci_dev %p, drvdata %p\n",
 					dev, nvme_cmajor, nvme_major,
 					pci_dev, pci_get_drvdata(pci_dev));
@@ -7600,7 +7630,7 @@ nvme_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	}
 	DPRINT1("BAR address 0x%p\n", dev->reg);
 
-	rms200_map_bar4(dev);
+	rms_map_bar4(dev);
 
 	/**
 	 * Make sure we can operate with existing parameters.
@@ -7762,7 +7792,7 @@ nvme_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	INIT_LIST_HEAD(&dev->ns_list);
 	nvme_alloc_disks(dev);
 
-	if (rms200_alloc_char_dev(dev) < 0) {
+	if (rms_alloc_char_dev(dev) < 0) {
 		EPRINT("Failed adding char device dev %d\n", dev->instance);
 	}
 
@@ -7773,7 +7803,7 @@ nvme_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 		(void) nvme_send_admin(dev, &entry, NULL, ADMIN_TIMEOUT);
 
 	dev->proc_dir = proc_mkdir(dev_name(dev->ctrl_dev), NULL);
-	dev->proc_entry_stats = proc_create_data("stats", 0444, dev->proc_dir, &rms200_stats_proc_fops, (void *) dev);
+	dev->proc_entry_stats = proc_create_data("stats", 0444, dev->proc_dir, &rms_stats_proc_fops, (void *) dev);
 	dev->proc_entry_qinfo = proc_create_data("qinfo", 0444, dev->proc_dir, &rms_proc_qinfo_fops, (void *) dev);
 	DPRINT("successful probe.....\n");
 	return 0;
@@ -7870,7 +7900,7 @@ nvme_remove(struct pci_dev *pci_dev)
 	 */
 	nvme_free_disks(dev);
 
-	rms200_free_char_dev(dev);
+	rms_free_char_dev(dev);
 
 	DPRINT1("control device %p \n", dev->ctrl_dev);
 	if (dev->ctrl_dev) {
@@ -7933,6 +7963,7 @@ nvme_remove(struct pci_dev *pci_dev)
 		iounmap(dev->ddr_remap);
 	pci_disable_device(pci_dev);
 	pci_release_regions(pci_dev);
+
 
 #ifdef NVME_DEBUG
 	DPRINT1("Releasing context 0x%p", dev);
@@ -8003,7 +8034,7 @@ nvme_init(void)
 		unregister_blkdev(nvme_major, DRV_NAME);
 		class_destroy(nvme_class);
 	}
-	rms200_setup_genetlink();
+	rms_setup_genetlink();
 
    	return result;
 }
@@ -8024,10 +8055,10 @@ nvme_exit(void)
 	pci_unregister_driver(&nvme_driver);
 	if (nvme_class)
 		class_destroy(nvme_class);
-	rms200_teardown_genetlink();
+	rms_teardown_genetlink();
 }
 
-MODULE_AUTHOR("support@idt.com>");
+MODULE_AUTHOR("support@radianmemory.com>");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(NVME_REL);
 module_init(nvme_init);

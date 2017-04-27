@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (C) 2013 Radian Memory Systems
+ * Copyright (C) 2013-2016 Radian Memory Systems, Inc.
  *
  * This program is free software: When used with a Linux driver,
  * you can redistribute it and/or modify it under the terms of the GNU
@@ -76,7 +76,7 @@ extern int	nvme_dbg;
 
 static DEFINE_MUTEX(char_io_mutex);
 
-static LIST_HEAD(rms200_cdev_list);
+static LIST_HEAD(rms_cdev_list);
 
 
 static u32
@@ -198,7 +198,7 @@ static struct genl_family nvme_event_family = {
 static int genetlink_established;
 
 int
-rms200_prepare_and_send_page(u32 page_id, u32 page_size, void *log_page)
+rms_prepare_and_send_page(u32 page_id, u32 page_size, void *log_page)
 {
 	struct sk_buff *skb;
 	struct nlattr *attr;
@@ -248,6 +248,11 @@ rms200_prepare_and_send_page(u32 page_id, u32 page_size, void *log_page)
 	memset(msg, 0, sizeof(struct dialog_page_msg));
 
 	msg->page_id = page_id;
+
+	if (page_size > sizeof(msg->log_page)) {
+		page_size = sizeof(msg->log_page);
+		pr_notice("%s log page size clipped to sz:%d\n", DRV_NAME, page_size);
+	}
 	msg->page_len = page_size;
 	memcpy(msg->log_page, log_page, page_size);
 
@@ -271,7 +276,7 @@ rms200_prepare_and_send_page(u32 page_id, u32 page_size, void *log_page)
 }
 
 int
-rms200_setup_genetlink(void)
+rms_setup_genetlink(void)
 {
 	pr_notice("Initalizing genetlink service\n");
 
@@ -293,7 +298,7 @@ rms200_setup_genetlink(void)
 }
 
 void
-rms200_teardown_genetlink(void)
+rms_teardown_genetlink(void)
 {
 	genl_unregister_family(&nvme_event_family);
 }
@@ -325,7 +330,7 @@ u32 check_local_pos(u32 local_pos, u32 global_pos, struct priv_char_dev *cdev, s
 }
 
 static ssize_t
-rms200_char_io(struct file *file, char __user *buf, size_t size, loff_t *ppos, int is_write)
+rms_char_io(struct file *file, char __user *buf, size_t size, loff_t *ppos, int is_write)
 {
 	unsigned int cnt = size;
 	unsigned int i;
@@ -514,39 +519,39 @@ write_err:
 }
 
 static ssize_t
-rms200_write(struct file *file,
+rms_cdev_write(struct file *file,
 		const char __user *buf,
 		size_t size,
 		loff_t *ppos)
 {
-        return (rms200_char_io(file, (char __user *) buf, size, ppos, 1));
+        return (rms_char_io(file, (char __user *) buf, size, ppos, 1));
 }
 
 static ssize_t
-rms200_read(struct file *file,
+rms_cdev_read(struct file *file,
 		char __user *buf,
 		size_t size,
 		loff_t *ppos)
 {
-        return (rms200_char_io(file, buf, size, ppos, 0));
+        return (rms_char_io(file, buf, size, ppos, 0));
 }
 
 static int
-rms200_open(struct inode *inode, struct file *file)
+rms_cdev_open(struct inode *inode, struct file *file)
 {
 	unsigned int minor = iminor(inode);
 	struct priv_char_dev *cdev, *tmp;
 	struct nvme_dev *dev;
 	int result;
 
-	list_for_each_entry_safe(cdev, tmp, &rms200_cdev_list, node) {
+	list_for_each_entry_safe(cdev, tmp, &rms_cdev_list, node) {
 		if (minor == cdev->miscdev.minor)
 			break;
 	}
 	if (!cdev)
 		return -ENXIO;
 
-	if (file->f_mode & FMODE_WRITE) {
+	if (file->f_mode & (FMODE_READ | FMODE_WRITE)) {
 		dev = cdev->dev;
 		result = nvme_rms_wait_charge(dev, file->f_flags & O_NDELAY);
 		if (result)
@@ -565,7 +570,7 @@ rms200_open(struct inode *inode, struct file *file)
  *
  */
 static loff_t
-rms200_lseek(struct file *file, loff_t offset, int orig)
+rms_cdev_lseek(struct file *file, loff_t offset, int orig)
 {
 	loff_t ret;
 	struct priv_char_dev *cdev;
@@ -605,7 +610,7 @@ rms200_lseek(struct file *file, loff_t offset, int orig)
 }
 
 static int
-rms200_mmap(struct file *file, struct vm_area_struct *vma)
+rms_cdev_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	unsigned long size = vma->vm_end - vma->vm_start;
 	struct priv_char_dev *cdev;
@@ -646,7 +651,7 @@ rms200_mmap(struct file *file, struct vm_area_struct *vma)
 }
 
 void
-rms200_map_bar4(struct nvme_dev *dev)
+rms_map_bar4(struct nvme_dev *dev)
 {
 	struct pci_dev *pci_dev;
 
@@ -683,17 +688,17 @@ rms200_map_bar4(struct nvme_dev *dev)
 		EPRINT("Unable to remap bar4 memory region\n");
 }
 
-static const struct file_operations rms200_fops = {
+static const struct file_operations rms_cdev_fops = {
 	.owner		= THIS_MODULE,
-	.llseek		= rms200_lseek,
-	.read		= rms200_read,
-	.write		= rms200_write,
-	.open		= rms200_open,
-	.mmap		= rms200_mmap,
+	.llseek		= rms_cdev_lseek,
+	.read		= rms_cdev_read,
+	.write		= rms_cdev_write,
+	.open		= rms_cdev_open,
+	.mmap		= rms_cdev_mmap,
 };
 
 void
-rms200_allowed_admin_cmd(struct nvme_dev *dev, struct usr_io *uio)
+rms_allowed_admin_cmd(struct nvme_dev *dev, struct usr_io *uio)
 {
 #if 0
 	u32 dmi_base;
@@ -713,7 +718,7 @@ rms200_allowed_admin_cmd(struct nvme_dev *dev, struct usr_io *uio)
 		/*
 		 * Get the first and only character device
 		 */
-		cdev = list_first_entry(&rms200_cdev_list, struct priv_char_dev, node);
+		cdev = list_first_entry(&rms_cdev_list, struct priv_char_dev, node);
 
 		/*
 		 * The base is expressed in units of 1 MB
@@ -735,6 +740,10 @@ rms200_allowed_admin_cmd(struct nvme_dev *dev, struct usr_io *uio)
 
 /*
  * Figure out the size of the DMI based character device
+ * To maintain backward compatiblity we need to distinguish
+ * between RMS-200 and RMS-250 as the firmware has bug
+ * where the offset of the vendor field in struct iden_namespace
+ * if wrong.
 */
 static u64 get_char_dev_size(struct nvme_dev *dev)
 {
@@ -752,6 +761,35 @@ static u64 get_char_dev_size(struct nvme_dev *dev)
 		}
 		dev->unlock_func(&dev->lock, &dev->lock_flags);
 		break;
+
+	case 0x325:
+	case 0x250:
+		{
+			u64 min_size = 0x80000000;	/* 2 GBytes on RMS-250 */
+
+			dev->lock_func(&dev->lock, &dev->lock_flags);
+			list_for_each_entry(ns, &dev->ns_list, list) {
+				/*
+				 * The following is a hack for older firmware versions that have
+				 * wrong vendor offset within struct iden_namespace.
+				 * It should be removed once RMS-250 firmware is finalized.
+				 */
+				if (min_size > (ns->block_count << ns->lba_shift)) {
+					min_size = ns->block_count << ns->lba_shift;
+				}
+				if (ns->vendor != 0) {
+					ddr_size = ns->block_count << ns->lba_shift;
+					break;
+				}
+			}
+			dev->unlock_func(&dev->lock, &dev->lock_flags);
+	
+			if (!ddr_size && !list_empty(&dev->ns_list)) {
+				ddr_size = min_size;
+				EPRINT("Setting char dev size by minimum %llx\n", min_size);
+			}
+		}
+		break;
 	default:
 		EPRINT("Unknown device %04x\n", dev->pci_dev->device);
 		break;
@@ -762,7 +800,7 @@ static u64 get_char_dev_size(struct nvme_dev *dev)
  * Add a character device to view the disk
  */
 int
-rms200_alloc_char_dev(struct nvme_dev *dev)
+rms_alloc_char_dev(struct nvme_dev *dev)
 {
 	struct priv_char_dev *cdev;
 	int	result;
@@ -786,7 +824,7 @@ rms200_alloc_char_dev(struct nvme_dev *dev)
 	sprintf(cdev->name, "%s%dc1", DEV_NAME, dev->instance);
 	cdev->dev = dev;
 	cdev->miscdev.name = cdev->name;
-	cdev->miscdev.fops = &rms200_fops;
+	cdev->miscdev.fops = &rms_cdev_fops;
 
 	pci_read_config_dword(dev->pci_dev, dev->rms_off + RMS_DMIWINBASE, &val);
 	cdev->dmi_window_base = val;
@@ -804,7 +842,7 @@ rms200_alloc_char_dev(struct nvme_dev *dev)
 	NPRINT("Adding Misc device minor %d \"%s\" size %lld\n",
 		cdev->miscdev.minor, cdev->name, dev->ddr_len);
 
-	list_add_tail(&cdev->node, &rms200_cdev_list);
+	list_add_tail(&cdev->node, &rms_cdev_list);
 	return 0;
 }
 
@@ -812,14 +850,14 @@ rms200_alloc_char_dev(struct nvme_dev *dev)
  * Remove a character device
  */
 void
-rms200_free_char_dev(struct nvme_dev *dev)
+rms_free_char_dev(struct nvme_dev *dev)
 {
 	struct priv_char_dev *cdev, *tmp;
 
 	if (dev->rms_off <= 0)
 		return;
 
-	list_for_each_entry_safe(cdev, tmp, &rms200_cdev_list, node) {
+	list_for_each_entry_safe(cdev, tmp, &rms_cdev_list, node) {
 		if (cdev->dev != dev)
 			continue;
 		list_del(&cdev->node);
@@ -841,7 +879,7 @@ rms_check_ns_count(struct nvme_dev *dev)
 }
 
 static int
-rms200_proc_dump_nvme_stats(struct seq_file *m, void *v)
+rms_proc_dump_nvme_stats(struct seq_file *m, void *v)
 {
 	int i;
 	struct	nvme_dev *priv = (struct nvme_dev *) m->private;
@@ -872,13 +910,13 @@ rms200_proc_dump_nvme_stats(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int rms200_stats_proc_open(struct inode *inode, struct file *file)
+static int rms_stats_proc_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, rms200_proc_dump_nvme_stats, PDE_DATA(inode));
+	return single_open(file, rms_proc_dump_nvme_stats, PDE_DATA(inode));
 }
 
-const struct file_operations rms200_stats_proc_fops = {
-	.open = rms200_stats_proc_open,
+const struct file_operations rms_stats_proc_fops = {
+	.open = rms_stats_proc_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
 	.release = single_release,
