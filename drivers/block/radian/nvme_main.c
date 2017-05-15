@@ -1119,9 +1119,10 @@ nvme_shutdown(struct pci_dev *pci_dev)
 	dev->unlock_func(&dev->lock, &dev->lock_flags);
 }
 
-
+/* Don't load on the NVMe class code, only load on the Radian card itself */
 static const struct pci_device_id nvme_id_table[] = {
-	{PCI_DEVICE_CLASS(0x010802, 0xffffff)},
+	/* {PCI_DEVICE_CLASS(0x010802, 0xffffff)}, */
+	{ PCI_DEVICE(0x1cc7, 0x200) },
 	{ 0, }
 };
 
