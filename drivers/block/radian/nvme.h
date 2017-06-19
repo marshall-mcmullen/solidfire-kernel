@@ -78,7 +78,7 @@
 #define BIT_31		(1 << 31)
 
 #define	DRV_NAME	"nvme_radian"
-#define	DEV_NAME	"nvme_radian"
+#define	DEV_NAME	"radian"          // Removed nvme from name so nvme-cli list works on nvme devices.
 
 #ifdef DEBUG
 #ifndef NVME_DEBUG
