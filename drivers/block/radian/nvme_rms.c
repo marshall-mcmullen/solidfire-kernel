@@ -107,7 +107,7 @@ nvme_rms_wait_charge(struct nvme_dev *dev, int ndelay)
 	 && !forcerdy
 	 && nvme_rms_cfg(dev) & RMS_EXT_BOOT_CAPCHARGING) {
 		dev_printk(KERN_INFO, &dev->pci_dev->dev,
-						"waiting for cap charge\n");
+						"waiting for cap charge %08x ndelay %d\n", dev->boot_cfg, ndelay );
 		if (ndelay)
 			return -EWOULDBLOCK;
 		nvme_wait_cond(dev, 120,
@@ -186,7 +186,9 @@ static struct genl_multicast_group nvme_event_mcgrp = {
 };
 
 static struct genl_family nvme_event_family = {
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4,10,0))
 	.id             = GENL_ID_GENERATE,
+#endif
 	.hdrsize        = 0,
 	.name           = NVME_EVENT_NAME,
 	.version        = 1,
@@ -752,6 +754,7 @@ static u64 get_char_dev_size(struct nvme_dev *dev)
 
 	switch (dev->pci_dev->device) {
 	case 0x200:
+	case 0x300:
 		dev->lock_func(&dev->lock, &dev->lock_flags);
 		list_for_each_entry(ns, &dev->ns_list, list) {
 			if (ns->id == 1) {
@@ -763,6 +766,7 @@ static u64 get_char_dev_size(struct nvme_dev *dev)
 		break;
 
 	case 0x325:
+	case 0x385:
 	case 0x250:
 		{
 			u64 min_size = 0x80000000;	/* 2 GBytes on RMS-250 */

@@ -1,7 +1,7 @@
 #****************************************************************************
 #
 # Copyright (c) 2010 - 2014 PMC-Sierra.
-# Copyright (c) 2014-2016 Radian Memory Systems, Inc.
+# Copyright (c) 2014 - 2017 Radian Memory Systems, Inc.
 #     All Rights Reserved
 #
 # Distribution of source code or binaries derived from this file is not
@@ -17,80 +17,8 @@
 #****************************************************************************
 
 Description - 
-	Release 0.95 on 10 June 2014
-	PMC-Sierra Block device driver support for NVMe controller card.
-	Driver may be included as part of kernel or as a loadable module 
-	depending on PCI driver.
-
-Resolved issues -
-
-	Release 0.95:
-	Fixed issue: non consecutive CPU ids result in kernel panic.
-	
-	Release 0.94:
-	Fixed issue with Format for XFS (PD-47)
-	Added additional PMC-Sierra device ID F117
-
-	Release 0.93:
-	Cancelling IOCTL commands when driver is performing NVMe reset (PD-22)
-	Return error on IOCTL commands if controller is offline (PD-23)
-	S.M.A.R.T log structure was defined as "packed" (PD-24)
-	Fixed "numDw" field in the log page structure to be 12 bits (PD-25)
-	Skipping 0-capacity namespaces (PD-26)
-
-	Release 0.91:
-	Fixed compile issue for kernel version 3.0.0
-	Fixed Error translation to string handling.
-	Fixed Probe hang issue when board fails to reset
-	Fixed Queue length parameter interpretation.
-	Updated Copyright notice.
-
-	Release 0.90:
-	Added DIF Support.
-	Added DIF TYPE1 to validate application TAG information.
-	Added DIF TYPE2 support.
-	Fixed issue validating NameSpace ID for pass-through IOCTL request
-
-	Release 0.83:
-	Fixed Centos 5.8 compile issue.
-	Fixed controller reset timeout calculation.
-	Switched to delay instead of wait function for reset due to 90 second FW timeout.
-	Fixed mdelay issue by including delay.h header file for Ubuntu 11.10.
-
-	Release 0.82:
-	Disabled Send AEN.
-	Fixed Lock contention during AEN event processing.
-	Modified reset logic to use controller supplied timeout value.
-	Modified nvme_hw_stop to prevent clearing enable if not already in Ready state.
-	Fixed IOCTL Vendor command to allow format of created Namespace.
-	Added additional device IDs 80D1 and 80D2.
-
-	Release 0.81:
-	Fixed timeout thread device INIT state handling.
-	Optimized Completion queue handling.
-	Disabled Premption to prevent race condition due to affinity issue.
-	Fixed Event log handling.
-	Fixed reboot/shutdown issue.
-
-	Release 0.80:
-	Fixed lba shift calculation for greater than 512 bytes logical block size.
-	Disabled threaded_interrupt by default
-
-	Release 0.79:
-	Resolved CPU preemption issue.
-	Create multi-threaded timeout recovery.
-	Fixed AMD Hang issue due to lock contentions.
-
-	Release 0.78:
-	Change to prevent clearing controller enable after shutdown.
-
-	Release 0.77:
-	Fixed Centos 5.8 MSIx interrupt routing issue.
-	Fixed non-threaded interrupt handling issue.
-	Added support for older kernels such as Centos5.8 and 6.3 to handle
-	    special IO requests such DISCARD correctly.
-	Added Check to discontinue chip revision 0 (ZA).
-	Corrected LBA range get_feature request to set proper NS_ID in header.
+	Release 1.8 June 2017
+	Updated support for kernel 4.x (through 4.9.y)
 
 Supported Features -
 	Driver currently supports multiple NVME cards.
@@ -103,18 +31,17 @@ Supported Features -
 	/dev/nvme0n2		# nx where 'x" presents Namespace ID.
 	/dev/nvme1n1		# nvme1 presents controller ID 1
 
-	Driver Also create a control node that is used by application to
-	send IOCTL, Admin.  Device nodes are created in "/dev/" directory.
+	Driver also creates a control node that is used by the application to
+	send ioctls.  Device nodes are created in "/dev/" directory.
 
 	/dev/nvme0		# nvmeX where X represents controller ID
 
 	For an RMS-200, character devices for mmap'ing memory are created
 
 	/dev/nvme0c1		# nvme0 presents controller ID 0
-	/dev/nvme0c2		# cx where 'x" presents Namespace ID.
 	/dev/nvme1c1		# nvme1 presents controller ID 1
 
-	File system TRIM is supported by driver. This feature is enabled 
+	File system TRIM is supported by this driver. This feature is enabled 
 	and reported to OS file system upon discovery of firmware TRIM
 	feature.
 
@@ -130,10 +57,9 @@ File system -
 	The file system is persistent across power cycles.
 
 Limitations -
-	PMC-Sierra driver may not co-exists with any other driver that supports NVME
-	    card. All drivers currently included as part of kernel should be 
-	    disabled prior to installing PMC-Sierra NVME driver.
-	Driver does not support revision 0 (ZA) NVMe controller.
+	This driver may not co-exist with any other driver that supports NVMe
+	cards.  All drivers currently included as part of kernel should be 
+	disabled prior to installing this NVME driver.
 
 Parameters -
 	Driver parameters are shared among all controller and IO queue.
@@ -181,16 +107,6 @@ SysFs -
 
         ns_count		     # Show number of Namespaces currently
 				       configured (read only attribute).
-	hot_remove		     # Show list of offline Namespace or 
-				       force Namespace with specified ID 
-				       offline.
-	hot_add			     # Show list of online Namespace or
-				       attempt to online a Namespace with 
-				       specified ID
-	cache_enable		     # Show or set controller cache state.
-				       A "0" to disable and a "1" to enable.
-	shutdown		     # Force controller shutdown
-				       A "1" to force shutdown.
 	pci_id		     	     # This is a read only attribute that allows 
 				       System Administrator to determine PCI ID
 				       of each controller.
@@ -198,40 +114,17 @@ SysFs -
 Supported Kernel -
 	Driver has been tested on following Linux kernel versions:
 	
-	2.6.38-8-generic	(Ubuntu 11.04)
-	2.6.18-308-el5		(Centos 5.8)
-	2.6.32-279-el6		(Centos 6.3)
-	2.6.32-431.17.1-el6	(Centos 6.5)
-	3.6.8
-	3.8.0
-	3.10.0
+	(all versions of 4.x up to 4.9.y are believed to work):
 	4.4.6			(Fedora 22)
 	4.9.17			(Fedora 24)
 
-Supported Hardware Platform -
-	Driver has been tested on following hardware platforms:
-
-	Dual node Xeon multi-processor.
-	Dual node AMD multi-processor.
-	Radian RMS-200 NVRAM.
-	Radian RMS-250 SSD.
-	Intel P3600 SSD.
-
 build -
-	The driver Makefile included with tarball that allow to build driver
-	without building the full kernel or all modules. However, driver
-	will build for currently running kernel.
-	Current build revision is determine by "uname -r". Driver expect the
-	current kernel header files and configuration information to be
-	present and valid.
-
 	make		# to build nvme_radian.ko module
 			# depends upon "/lib/module/'uname -r'"
 
 install -
-	It is strongly Suggested to test driver load prior to including it
+	It is strongly suggested to test driver load prior to including it
 	in kernel auto load. 
-
 
 	sudo insmod ./nvme_radian.ko 	# to manually load the driver
 
@@ -248,3 +141,4 @@ initrd -
 	initrd file using the command (On Fedora/Centos distribution):
 
 	cd /boot; sudo dracut --omit-drivers nvme --force
+

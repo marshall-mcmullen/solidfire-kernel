@@ -116,6 +116,10 @@
 
 #endif
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4,11,0))
+#define HAVE_PCI_LINK_RESET
+#endif
+
 /* implementation variations... */
 #ifdef HAVE_ENDIO2
 #define BIO_ENDIO(bio, err)	bio_endio(bio, err)
@@ -153,11 +157,13 @@
 #define BIO_OPF_TYPE long
 #define BIO_OPF(bio) ((bio)->bi_opf)
 #define BIO_IS_READ(bio) (bio_op(bio) == REQ_OP_READ)
+#define BIO_IS_DISCARD(bio) (bio_op(bio) == REQ_OP_DISCARD)
 #else
 #define BIO_OPF_TYPE long
 #define BIO_OPF(bio) ((bio)->bi_rw)
 /* original code assumes? that !(bio_rw == 0) implies write...!?? */
 #define BIO_IS_READ(bio) (!bio_rw(bio))
+#define BIO_IS_DISCARD(bio) (BIO_OPF(bio) & REQ_OP_DISCARD)
 #endif
 
 #ifdef HAVE_REQOP
@@ -172,8 +178,7 @@
  * Conditional compile flags
  */
 #define USE_NS_ATTR 	0
-
-#define NVME_DISCARD		0
+#define NVME_DISCARD		1
 #define DO_IO_STAT  		0
 #define SEND_AEN		1
 #define FORCE_ERROR 	0
@@ -240,7 +245,7 @@ static int 	reset_card_on_timeout = 0;
 static int  nvme_idle_count = 0;
 int nvme_dbg = NVME_DEBUG_ALL;
 #endif
-#define NVME_REL	"1.8rc2"
+#define NVME_REL	"1.8"
 
 /**
  * For Instance allocation.
@@ -959,6 +964,7 @@ nvme_dump_registers(struct pci_dev *pci_dev)
 	return (result);
 }
 
+#ifdef HAVE_PCI_LINK_RESET
 static pci_ers_result_t
 nvme_link_reset(struct pci_dev *pci_dev)
 {
@@ -978,6 +984,8 @@ nvme_link_reset(struct pci_dev *pci_dev)
 #endif
 	return (result);
 }
+#endif
+
 
 static pci_ers_result_t
 nvme_slot_reset(struct pci_dev *pci_dev)
@@ -1023,7 +1031,9 @@ nvme_error_resume(struct pci_dev *pci_dev)
 static struct pci_error_handlers nvme_err_handler = {
 	.error_detected = nvme_error_detected,
 	.mmio_enabled   = nvme_dump_registers,
+#ifdef HAVE_PCI_LINK_RESET
 	.link_reset = nvme_link_reset,
+#endif
 	.slot_reset = nvme_slot_reset,
 	.resume 	= nvme_error_resume,
 };
@@ -2107,7 +2117,7 @@ nvme_disk_stat_cong(struct nvme_dev *dev, struct ns_info *ns, struct bio *bio)
 
 		if (!nvme_do_io_stat)
 			return;
-		if (BIO_OPF(bio) & REQ_OP_DISCARD)
+		if (BIO_IS_DISCARD(bio))
 			return;
 
 		cpu = part_stat_lock();
@@ -2153,7 +2163,7 @@ nvme_disk_stat_in(struct nvme_dev *dev, struct cmd_info *cmd_info,
 
 		if (!nvme_do_io_stat)
 			return;
-		if (BIO_OPF(bio) & REQ_OP_DISCARD)
+		if (BIO_IS_DISCARD(bio))
 			return;
 
 		cpu = part_stat_lock();
@@ -2195,7 +2205,7 @@ nvme_disk_stat_completion(struct nvme_dev *dev, struct cmd_info *cmd_info)
 
 		if (!nvme_do_io_stat)
 		return;
-	if (!bio || (BIO_OPF(bio) & REQ_OP_DISCARD))
+	if (!bio || BIO_IS_DISCARD(bio))
 			return;
 
 		cpu = part_stat_lock();
@@ -2235,7 +2245,7 @@ nvme_disk_stat_iodone(struct nvme_dev *dev, struct cmd_info *cmd_info)
 		 */
 		if (!nvme_do_io_stat)
 		return;
-		if (!bio || (BIO_OPF(bio) & REQ_OP_DISCARD))
+		if (!bio || BIO_IS_DISCARD(bio))
 			return;
 
 		cpu = part_stat_lock();
@@ -4611,11 +4621,11 @@ nvme_process_sglist(struct queue_info *qinfo, struct cmd_info *cmd_info,
 				DPRINT6("***** Unable to Merge v1 0x%x [%x] v2 0x%x [%x]\n",
 						bvec.bv_offset, bvec.bv_len,
 						bvprv.bv_offset, bvprv.bv_len);
-			break;
-		}
-		sg = sg ? sg+1 : cmd_info->sg_list;
+				break;
+			}
+			sg = sg ? sg+1 : cmd_info->sg_list;
 
-		sg_set_page(sg, bvec.bv_page, bvec.bv_len, bvec.bv_offset);
+			sg_set_page(sg, bvec.bv_page, bvec.bv_len, bvec.bv_offset);
 			DPRINT6("sgl [%d] page %p, phys 0x%llx 0x%x %x\n",
 				nsegs, sg->page, bvec_to_phys(bvec),
 				bvec.bv_offset, bvec.bv_len);
@@ -4831,7 +4841,7 @@ nvme_submit_request(struct queue_info *qinfo, struct ns_info *ns,
 		/**
 		 * process bio sglist and setup prp list.
 		 */
-		if (unlikely(BIO_OPF(bio) & REQ_OP_DISCARD)) {
+		if (unlikely(BIO_IS_DISCARD(bio))) {
 			DPRINT2("bio %p, ns %d, DISCARD size %u\n",
 						bio, ns->id, bio->bi_iter.bi_size);
 			length = bio->bi_iter.bi_size;
@@ -4895,7 +4905,7 @@ nvme_submit_request(struct queue_info *qinfo, struct ns_info *ns,
 		}
 		cmd->header.cmdID = cmd_info->cmd_id;
 		cmd_info->timeout_id = dev->timeout_id;
-		if (!(BIO_OPF(bio) & REQ_OP_DISCARD)) {
+		if (!(BIO_IS_DISCARD(bio))) {
 			qinfo->timeout[cmd_info->timeout_id]++;
 		}
 #if DO_IO_STAT
