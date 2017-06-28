@@ -1,0 +1,8 @@
+config MVLOKI
+       tristate "Marvell NVRAM Card Support"
+       depends on PCI
+       ---help---
+       This driver supports the Marvell NVRAM PCI-e Card.
+
+       To compile this driver as a module, choose M here.  The module
+       will be called mvloki.

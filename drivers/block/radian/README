@@ -1,0 +1,144 @@
+#****************************************************************************
+#
+# Copyright (c) 2010 - 2014 PMC-Sierra.
+# Copyright (c) 2014 - 2017 Radian Memory Systems, Inc.
+#     All Rights Reserved
+#
+# Distribution of source code or binaries derived from this file is not
+# permitted except as specifically allowed for in the Integrated Device
+# Technology Software License agreement.  All copies of this source code
+# modified or unmodified must retain this entire copyright notice and
+# comment as is.
+#
+# THIS SOFTWARE IS PROVIDED "AS IS" AND WITHOUT ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+#
+#****************************************************************************
+
+Description - 
+	Release 1.8 June 2017
+	Updated support for kernel 4.x (through 4.9.y)
+
+Supported Features -
+	Driver currently supports multiple NVME cards.
+	Driver supports any device in class NVMe.
+	Driver queries controller and creates a device node for each 
+	Namespace starting from "Namespace 1". Device nodes are created
+	in "/dev/" directory by the order of their Namespace ID.
+
+	/dev/nvme0n1		# nvme0 presents controller ID 0
+	/dev/nvme0n2		# nx where 'x" presents Namespace ID.
+	/dev/nvme1n1		# nvme1 presents controller ID 1
+
+	Driver also creates a control node that is used by the application to
+	send ioctls.  Device nodes are created in "/dev/" directory.
+
+	/dev/nvme0		# nvmeX where X represents controller ID
+
+	For an RMS-200, character devices for mmap'ing memory are created
+
+	/dev/nvme0c1		# nvme0 presents controller ID 0
+	/dev/nvme1c1		# nvme1 presents controller ID 1
+
+	File system TRIM is supported by this driver. This feature is enabled 
+	and reported to OS file system upon discovery of firmware TRIM
+	feature.
+
+Block IO -
+	Driver supports standard Linux Block device interface. Linux disk
+	partitions may be created using "fdisk" Linux utility. The "fdisk"
+	is currently supported and other utilities have not yet been tested.
+
+	fdisk /dev/nvme0nx	# Create or view partitions on Namespace "x"
+
+File system -
+	File systems may be created on any partitions created by "fdisk". 
+	The file system is persistent across power cycles.
+
+Limitations -
+	This driver may not co-exist with any other driver that supports NVMe
+	cards.  All drivers currently included as part of kernel should be 
+	disabled prior to installing this NVME driver.
+
+Parameters -
+	Driver parameters are shared among all controller and IO queue.
+	These allow administrator to modify default driver values such as 
+	submission and completion queue size, limit number of requests posted
+	to each IO queue. 
+
+	nvme_major		     # Set NVME driver major number
+				       Default of 0 to use OS assigned.
+	admin_cpl_queue_size	     # Set admin completion queue size
+				       Default is 1024. Writable only during
+				       driver load.
+	admin_sub_queue_size	     # Set admin submission queue size
+				       Default is 1024. Writable only during
+				       driver load.
+	io_cpl_queue_size	     # Set IO completion queue size
+				       Default is 1024. Writable only during
+				       driver load.
+	io_sub_queue_size	     # Set IO submission queue size
+				       Default is 1024. Writable only during
+				       driver load.
+	io_command_id_size	     # Set number of cached command IDs.
+				       Default is 1024, maximum 65535. Writable
+				       only during driver load.
+	transfer_size		     # Set maximum transfer size in K units.
+				       Default is 128. Writable only during
+				       driver load.
+	max_io_request               # IO queue throttle to limit number of IO
+				       posted to each queue.
+	intr_coalescing_threshold    # set interrupt coalescing completion 
+				       count. Default is 3. Writable only
+				       during driver load.
+	intr_coalescing_time         # set interrupt coalescing time.
+				       Default is 1. Writable only during
+				       driver load.
+	nvme_do_io_stat		     # Enable or disable IO statistics
+				       Default is 0 (disabled).
+	nvme_msix_enable             # Enable or disable MSI-X interrupt
+				       Default is 1 (enabled).
+
+SysFs -
+	Driver exports a set if functions through SysFS interface to allow
+	user to examine or control firmware options. There is a set of 
+	following attributes per controller.
+
+        ns_count		     # Show number of Namespaces currently
+				       configured (read only attribute).
+	pci_id		     	     # This is a read only attribute that allows 
+				       System Administrator to determine PCI ID
+				       of each controller.
+
+Supported Kernel -
+	Driver has been tested on following Linux kernel versions:
+	
+	(all versions of 4.x up to 4.9.y are believed to work):
+	4.4.6			(Fedora 22)
+	4.9.17			(Fedora 24)
+
+build -
+	make		# to build nvme_radian.ko module
+			# depends upon "/lib/module/'uname -r'"
+
+install -
+	It is strongly suggested to test driver load prior to including it
+	in kernel auto load. 
+
+	sudo insmod ./nvme_radian.ko 	# to manually load the driver
+
+Auto load -
+	To allow driver to load automatically as part of the kernel.
+	This requires "root" permission to add "nvme_radian" to list of default
+	kernel modules.
+
+	sudo ./install.sh
+
+initrd -
+	In order to prevent the native linux nvme driver from taking over
+	the device it is possible to exclude the nvme driver from the
+	initrd file using the command (On Fedora/Centos distribution):
+
+	cd /boot; sudo dracut --omit-drivers nvme --force
+
