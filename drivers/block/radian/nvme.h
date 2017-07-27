@@ -341,7 +341,6 @@ struct nvme_dev {
 	__u16			nvmCmdSupport;	/* NVM supported command */
 	__u32               	wq_done;	/* nr of wq_thread processed */
 	struct iden_controller *identify;	/* Controller Ident data */
-	struct msix_entry *	msix_entry;	/* Array of MSI-X vectors */
 	struct queue_info *	admin_queue;	/* Admin queue */
 	int			event_count;	/* Number of pending events */
 	struct list_head	event_list;	/* List of event info */

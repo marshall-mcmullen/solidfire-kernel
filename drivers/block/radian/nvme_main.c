@@ -6133,8 +6133,6 @@ nvme_admin_cons(struct nvme_dev *dev)
 	 * we actually need.
 	 *
 	 */
-	dev->msix_entry[0].vector   = dev->pci_dev->irq;
-	dev->msix_entry[0].entry	= 0;
 	qinfo->cq_ivec  = 0;
 	qinfo->cpu_cnt  = num_online_cpus();
 	qinfo->doorbell = dev->reg + NVME_ACQHDBL;
@@ -6204,7 +6202,7 @@ nvme_create_io_queues(struct nvme_dev *dev, u32 nr_io_queues)
 		sqinfo->doorbell	= dev->reg + ((i * 8) + NVME_ASQTDBL);
 
 		DPRINT3("IO queue [%d] cpu %d cpu count %d, vector %d\n",
-			qinfo->id, cpu, cpu_cnt, dev->msix_entry[i].vector);
+			qinfo->id, cpu, cpu_cnt, pci_irq_vector(dev->pci_dev, i));
 		DPRINT3("IO queue [%d] %p, Comp DB %p, Sub DB %p\n",
 			qinfo->id, qinfo,
 			qinfo->doorbell, qinfo->sub_queue->doorbell);
@@ -6231,7 +6229,7 @@ nvme_create_io_queues(struct nvme_dev *dev, u32 nr_io_queues)
 		if (! ishared && (nvme_request_irq(dev, qinfo,
 						qinfo->ivec_name, cpu) < 0)) {
 			EPRINT("Failed to assign irq[%d] %03d\n", qinfo->cq_ivec,
-				dev->msix_entry[qinfo->cq_ivec].vector);
+				pci_irq_vector(dev->pci_dev, qinfo->cq_ivec));
 		result = -ENOMEM;
 		nvme_delete_sq(dev, qinfo->id);
 		nvme_delete_cq(dev, qinfo->id);
@@ -7027,14 +7025,14 @@ nvme_release_irq(struct nvme_dev *dev, struct queue_info *qinfo)
 
 		DPRINT2("Releasing IRQ qid %d, vector [%d] %d\n",
 				qinfo->id, qinfo->cq_ivec,
-				dev->msix_entry[qinfo->cq_ivec].vector);
+				pci_irq_vector(dev->pci_dev, qinfo->cq_ivec));
 		if (nvme_msix_enable) {
 
-			irq_set_affinity_hint(dev->msix_entry[qinfo->cq_ivec].vector,
+			irq_set_affinity_hint(pci_irq_vector(dev->pci_dev, qinfo->cq_ivec),
 							NULL);
-		free_irq(dev->msix_entry[qinfo->cq_ivec].vector, qinfo);
+		free_irq(pci_irq_vector(dev->pci_dev, qinfo->cq_ivec), qinfo);
 		} else {
-		free_irq(dev->msix_entry[qinfo->cq_ivec].vector, dev);
+		free_irq(pci_irq_vector(dev->pci_dev, qinfo->cq_ivec), dev);
 		}
 	}
 	qinfo->ivec_acquired = 0;
@@ -7059,7 +7057,7 @@ nvme_request_irq(struct nvme_dev *dev, struct queue_info *qinfo,
 	if (qinfo->ivec_acquired) {
 			DPRINT2("IRQ already acquired cpu %d, qid %d, vector [%d] %d\n",
 				cpu, qinfo->id, qinfo->cq_ivec,
-				dev->msix_entry[qinfo->cq_ivec].vector);
+				pci_irq_vector(dev->pci_dev, qinfo->cq_ivec));
 		return (-1);
 	}
 	if (nvme_msix_enable) {
@@ -7068,7 +7066,7 @@ nvme_request_irq(struct nvme_dev *dev, struct queue_info *qinfo,
 						get_cpu_mask(cpu),
 					*((ulong *)get_cpu_mask(cpu)));
 				result = irq_set_affinity_hint(
-				dev->msix_entry[qinfo->cq_ivec].vector,
+				pci_irq_vector(dev->pci_dev, qinfo->cq_ivec),
 				get_cpu_mask(cpu));
 				DPRINT2("set CPU affinity result %x\n", result);
 		}
@@ -7076,14 +7074,14 @@ nvme_request_irq(struct nvme_dev *dev, struct queue_info *qinfo,
 		if (use_threaded_interrupts) {
 			DPRINT2("irq: cpu %d, qid %d, %s -> vector [%d] %d\n",
 				cpu, qinfo->id, name, qinfo->cq_ivec,
-				dev->msix_entry[qinfo->cq_ivec].vector);
+				pci_irq_vector(dev->pci_dev, qinfo->cq_ivec));
 			result = request_threaded_irq(
-				dev->msix_entry[qinfo->cq_ivec].vector,
+				pci_irq_vector(dev->pci_dev, qinfo->cq_ivec),
 				nvme_check_isr, nvme_isr,
 				IRQF_SHARED, name, qinfo);
 		} else
 		{
-			result = request_irq(dev->msix_entry[qinfo->cq_ivec].vector,
+			result = request_irq(pci_irq_vector(dev->pci_dev, qinfo->cq_ivec),
 				nvme_isr,
 				IRQF_SHARED, name, qinfo);
 		}
@@ -7091,10 +7089,10 @@ nvme_request_irq(struct nvme_dev *dev, struct queue_info *qinfo,
 	} else {
 		DPRINT2("INTx: cpu %d, qid %d, %s -> vector [%d] %d\n",
 				cpu, qinfo->id, name, qinfo->cq_ivec,
-				dev->msix_entry[qinfo->cq_ivec].vector);
+				pci_irq_vector(dev->pci_dev, qinfo->cq_ivec));
 		use_threaded_interrupts = 0;
 		nvme_pci_enable_intx(dev->pci_dev);
-		result = request_irq(dev->msix_entry[qinfo->cq_ivec].vector,
+		result = request_irq(pci_irq_vector(dev->pci_dev, qinfo->cq_ivec),
 				nvme_intx_isr, IRQF_SHARED,
 				name, dev);
 	}
@@ -7103,12 +7101,12 @@ nvme_request_irq(struct nvme_dev *dev, struct queue_info *qinfo,
 		DPRINT2("Assigned cpu %d, qid %d, affinity %s vector [%d]"
 					" %03d\n",
 				cpu, qinfo->id, name, qinfo->cq_ivec,
-				dev->msix_entry[qinfo->cq_ivec].vector);
+				pci_irq_vector(dev->pci_dev, qinfo->cq_ivec));
 	} else {
 		EPRINT("Failed to assign cpu %d, qid %d, affinity %s vector [%d]"
 					" %03d\n",
 				cpu, qinfo->id, name, qinfo->cq_ivec,
-				dev->msix_entry[qinfo->cq_ivec].vector);
+				pci_irq_vector(dev->pci_dev, qinfo->cq_ivec));
 	}
 	return (result);
 }
@@ -7223,7 +7221,7 @@ static int
 nvme_enable_msix(struct nvme_dev *dev)
 {
 
-	int result, nr_cpu, i, nr_vec, nr_node;
+	int result, nr_cpu, nr_vec, nr_node;
 
 	nr_cpu = num_online_cpus();
 	nr_node = num_online_nodes();
@@ -7232,12 +7230,10 @@ nvme_enable_msix(struct nvme_dev *dev)
 			num_online_cpus(), num_online_nodes());
 
 	nr_vec = nr_cpu + 1;
-	for (i = 0; i < nr_vec; i++)
-		dev->msix_entry[i].entry = i;
 
 	for (;;) {
-		result = pci_enable_msix(dev->pci_dev, dev->msix_entry, nr_vec);
-		if (result == 0) {
+		result = pci_alloc_irq_vectors(dev->pci_dev, nr_vec, nr_vec, PCI_IRQ_MSIX);
+		if (result > 0) {
 		break;
 #if NVME_NUMA_VECTORS
 		} else if ((result > 0) && (result >= nr_node)) {
@@ -7582,14 +7578,6 @@ nvme_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	}
 
 	/**
-	 * allocate MSIx interrupt vector information entries
-	 */
-	dev->msix_entry = kcalloc(num_online_cpus()+1, sizeof(*dev->msix_entry),
-								GFP_KERNEL);
-	if (! dev->msix_entry)
-		goto free;
-
-	/**
 	 * Initialize Device structure.
 	 */
 	spin_lock_init(&dev->lock);
@@ -7859,8 +7847,7 @@ free:
 
 	if (dev->identify)
 		kfree(dev->identify);
-	if (dev->msix_entry)
-		kfree(dev->msix_entry);
+        pci_free_irq_vectors(dev->pci_dev);
 	kfree(dev);
 
 	dev_printk(KERN_ERR, &pci_dev->dev, "Failed probe..... %d\n",
@@ -7986,7 +7973,7 @@ nvme_remove(struct pci_dev *pci_dev)
 	 */
 	if (dev->identify)
 		kfree(dev->identify);
-	kfree(dev->msix_entry);
+        pci_free_irq_vectors(dev->pci_dev);
 	kfree(dev);
 }
 
