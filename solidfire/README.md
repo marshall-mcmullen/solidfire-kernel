@@ -57,7 +57,24 @@ when Ember's genkernel config matches the available solidfire-sources
 ebuilds in the solidfire-portage snapshot, and the ebuilds reference
 valid tags in the solidfire-kernel repo.
 
-Getting all those pieces working right can take some time...
+Getting all those pieces working right takes some careful work:
+
+1.  Push the kernel sources to the solidfire-kernel repo.  Official Ember
+    kernels should have a tag identifying the commit, developer builds
+    do not need it.
+
+2.  In the solidfire-portage repo, add a new ebuild to
+    sys-kernel/solidfire-sources with the EGIT_COMMIT pointing at
+    the commit you want to build.  Update the manifest.  Push to the
+    "ember" branch.
+
+3.  Tell Jenkins to make a new solidfire-portage snapshot:
+    http://pw-jenkins.pw.solidfire.net:8080/job/ember-snapshots/
+
+4.  In the ember repo, update flavors/base/conf/kernel.exports (and
+    kernel.config, if needed).
+
+5.  "make element-iso"
 
 
 ## Quick developer builds
