@@ -53,6 +53,10 @@ struct target_backend_ops {
 	int (*format_prot)(struct se_device *);
 	void (*free_prot)(struct se_device *);
 
+#ifdef SOLIDFIRE_LUN
+        void (*abort_task)(struct se_device *, struct se_cmd *);
+#endif
+
 	struct configfs_attribute **tb_dev_attrib_attrs;
 };
 

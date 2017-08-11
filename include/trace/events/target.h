@@ -181,6 +181,22 @@ TRACE_EVENT(target_cmd_complete,
 		__string(initiator,	cmd->se_sess->se_node_acl->initiatorname)
 	),
 
+#ifdef SOLIDFIRE_LUN
+        TP_fast_assign(
+                __entry->unpacked_lun   = cmd->orig_fe_lun;
+                __entry->opcode         = cmd->t_task_cdb ? cmd->t_task_cdb[0] : 0xff;
+                __entry->data_length    = cmd->data_length;
+                __entry->task_attribute = cmd->sam_task_attr;
+                __entry->scsi_status    = cmd->scsi_status;
+                __entry->sense_length   = cmd->scsi_status == SAM_STAT_CHECK_CONDITION ?
+                        min(18, ((u8 *) cmd->sense_buffer)[SPC_ADD_SENSE_LEN_OFFSET] + 8) : 0;
+                memcpy(__entry->cdb,
+                        cmd->t_task_cdb ? cmd->t_task_cdb : &cmd->__t_task_cdb[0],
+                        TCM_MAX_COMMAND_SIZE);
+                memcpy(__entry->sense_data, cmd->sense_buffer, __entry->sense_length);
+                __assign_str(initiator, cmd->se_sess->se_node_acl->initiatorname);
+        ),
+#else
 	TP_fast_assign(
 		__entry->unpacked_lun	= cmd->orig_fe_lun;
 		__entry->opcode		= cmd->t_task_cdb[0];
@@ -193,6 +209,7 @@ TRACE_EVENT(target_cmd_complete,
 		memcpy(__entry->sense_data, cmd->sense_buffer, __entry->sense_length);
 		__assign_str(initiator, cmd->se_sess->se_node_acl->initiatorname);
 	),
+#endif
 
 	TP_printk("%s <- LUN %03u status %s (sense len %d%s%s)  %s data_length %6u  CDB %s  (TA:%s C:%02x)",
 		  __get_str(initiator), __entry->unpacked_lun,

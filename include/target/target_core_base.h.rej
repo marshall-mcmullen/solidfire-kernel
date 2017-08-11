@@ -1,0 +1,10 @@
+--- target_core_base.h	2017-03-17 12:22:15.645644171 -0600
++++ target_core_base.h	2017-07-31 11:13:59.066019345 -0600
+@@ -191,6 +204,7 @@
+ 	TCM_LOGICAL_BLOCK_APP_TAG_CHECK_FAILED	= R(0x16),
+ 	TCM_LOGICAL_BLOCK_REF_TAG_CHECK_FAILED	= R(0x17),
+ 	TCM_COPY_TARGET_DEVICE_NOT_REACHABLE	= R(0x18),
++        TCM_RESET_IN_PROG                       = R(0x19),
+ #undef R
+ };
+ 
