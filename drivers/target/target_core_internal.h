@@ -6,6 +6,8 @@
 #include <linux/types.h>
 #include <target/target_core_base.h>
 
+#define SOLIDFIRE_LUN
+
 #define TARGET_CORE_NAME_MAX_LEN	64
 #define TARGET_FABRIC_NAME_SIZE		32
 

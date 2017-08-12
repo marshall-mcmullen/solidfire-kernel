@@ -888,6 +888,236 @@ static struct bin_attribute sysfs_dcbx_tlv_attr = {
 	.read = qla2x00_sysfs_read_dcbx_tlv,
 };
 
+#ifdef SOLIDFIRE_TEMP_WWN
+/**
+ * Structure representing a temporary WWN assigned to a QLogic fibre channel
+ * port at a specific PCI device address.
+ */
+typedef struct {
+        struct list_head node;
+        int              pci_domain;
+        uint8_t          pci_bus;
+        uint8_t          pci_devfn;
+        uint8_t          wwnn[WWN_SIZE];
+        uint8_t          wwpn[WWN_SIZE];
+} solidfire_temp_wwn_t;
+
+/**
+ * Global list containing all of the temporarily assigned WWNs for all QLogic
+ * fibre channel ports in the system.
+ */
+static LIST_HEAD(solidfire_temp_wwn_list);
+
+/**
+ * Simple lock to prevent concurrent acess to the global temporary WWN list
+ * solidfire_temp_wwn_list.
+ */
+static DEFINE_MUTEX(solidfire_temp_wwn_lock);
+
+/**
+ * Retrieves the value of the SolidFire temporary WWN assigned to a specific
+ * port.
+ *
+ * @param[in] vha   The QLogic SCSI Host representing the port whose WWN is
+ *                  being queried.
+ * @param[out] wwnn A buffer into which the current temporary WWNN value will
+ *                  be placed.  This buffer is assumed to be WWN_SIZE
+ *                  characters in length.
+ * @param[out] wwnp A buffer into which the current temporary WWPN value will
+ *                  be placed.  This buffer is assumed to be WWN_SIZE
+ *                  characters in length.
+ */
+void solidfire_get_temp_wwn(scsi_qla_host_t *vha, uint8_t *wwnn, uint8_t *wwpn)
+{
+        int pci_domain = pci_domain_nr(vha->hw->pdev->bus);
+        uint8_t pci_bus = vha->hw->pdev->bus->number;
+        uint8_t pci_devfn = vha->hw->pdev->devfn;
+        solidfire_temp_wwn_t *temp_wwn;
+
+        /* Zero-fill the outputs in case we don't find them in the list. */
+        memset(wwnn, 0, WWN_SIZE);
+        memset(wwpn, 0, WWN_SIZE);
+
+        /**
+         * Search for the PCI address in the SolidFire temporary WWN list.  If
+         * we find it, fill in the information into the outputs.
+         */
+        mutex_lock(&solidfire_temp_wwn_lock);
+        list_for_each_entry(temp_wwn, &solidfire_temp_wwn_list, node) {
+                if (pci_domain == temp_wwn->pci_domain &&
+                    pci_bus    == temp_wwn->pci_bus    &&
+                    pci_devfn  == temp_wwn->pci_devfn) {
+                        memcpy(wwnn, temp_wwn->wwnn, WWN_SIZE);
+                        memcpy(wwpn, temp_wwn->wwpn, WWN_SIZE);
+                        break;
+                }
+        }
+        mutex_unlock(&solidfire_temp_wwn_lock);
+}
+
+/**
+ * Creates or updates a SolidFire temporary WWN assigned to a specific port.
+ *
+ * @param vha  The QLogic SCSI Host representing the port whose WWN is being
+ *             changed.
+ * @param wwnn The WWNN to temporarily assign to the fibre channel port.  This
+ *             buffer is assumed to be WWN_SIZE characters in length.  A
+ *             zero-filled buffer may be passed to clear the temporary WWNN.
+ * @param wwnn The WWPN to temporarily assign to the fibre channel port.  This
+ *             buffer is assumed to be WWN_SIZE characters in length.  A
+ *             zero-filled buffer may be passed to clear the temporary WWPN.
+ */
+void solidfire_set_temp_wwn(scsi_qla_host_t *vha, uint8_t *wwnn, uint8_t *wwpn)
+{
+        int pci_domain = pci_domain_nr(vha->hw->pdev->bus);
+        uint8_t pci_bus = vha->hw->pdev->bus->number;
+        uint8_t pci_devfn = vha->hw->pdev->devfn;
+        solidfire_temp_wwn_t *i = 0;
+        solidfire_temp_wwn_t *temp_wwn = 0;
+
+        mutex_lock(&solidfire_temp_wwn_lock);
+
+        /* Search for an existing temporary WWN on the given port. */
+        list_for_each_entry(i, &solidfire_temp_wwn_list, node) {
+                if (pci_domain == i->pci_domain &&
+                    pci_bus    == i->pci_bus    &&
+                    pci_devfn  == i->pci_devfn) {
+                        temp_wwn = i;
+
+                        /* The desired values are already set, bail early. */
+                        if (memcmp(i->wwnn, wwnn, WWN_SIZE) == 0 &&
+                            memcmp(i->wwpn, wwpn, WWN_SIZE) == 0) {
+                                mutex_unlock(&solidfire_temp_wwn_lock);
+                                return;
+                        }
+
+                        break;
+                }
+        }
+
+        /**
+         * There is not an existing temporary WWN for the given port.  Make one.
+         */
+        if (!temp_wwn) {
+                temp_wwn = kmalloc(sizeof(solidfire_temp_wwn_t), GFP_KERNEL);
+                temp_wwn->pci_domain = pci_domain;
+                temp_wwn->pci_bus = pci_bus;
+                temp_wwn->pci_devfn = pci_devfn;
+                list_add(&temp_wwn->node, &solidfire_temp_wwn_list);
+        }
+
+        /* Copy the WWN values in both cases. */
+        memcpy(temp_wwn->wwnn, wwnn, WWN_SIZE);
+        memcpy(temp_wwn->wwpn, wwpn, WWN_SIZE);
+
+        mutex_unlock(&solidfire_temp_wwn_lock);
+
+        /* Update the sysfs to whatever the current WWPN/WWNN are. */
+        fc_host_node_name(vha->host) = wwn_to_u64(wwnn);
+        fc_host_port_name(vha->host) = wwn_to_u64(wwpn);
+}
+
+/**
+ * Releases all of the memory used by the SolidFire temporary WWNs that have
+ * been assigned since the module was loaded.  This used only during unloading
+ * of the module.
+ */
+void solidfire_free_temp_wwn(void)
+{
+        solidfire_temp_wwn_t *i, *n;
+        mutex_lock(&solidfire_temp_wwn_lock);
+        list_for_each_entry_safe(i, n, &solidfire_temp_wwn_list, node) {
+                list_del(&i->node);
+                kfree(i);
+        }
+        mutex_unlock(&solidfire_temp_wwn_lock);
+}
+
+/**
+ * This function is called when userspace attempts to read the
+ * solidfire_temp_wwn file.  The text returned is valid JSON of the format
+ *     { "WWNN" : "1122334455667788", "WWPN" : "9988776655443322" }
+ */
+static ssize_t
+solidfire_sysfs_temp_wwn_show(struct device *dev, struct device_attribute *attr,
+                              char *buf)
+{
+        scsi_qla_host_t *vha = shost_priv(class_to_shost(dev));
+        uint8_t wwnn[WWN_SIZE];
+        uint8_t wwpn[WWN_SIZE];
+
+        solidfire_get_temp_wwn(vha, wwnn, wwpn);
+        return scnprintf(buf, PAGE_SIZE,
+                         "%02x%02x%02x%02x%02x%02x%02x%02x "
+                         "%02x%02x%02x%02x%02x%02x%02x%02x",
+                         (int)wwnn[0],(int)wwnn[1],(int)wwnn[2],(int)wwnn[3],
+                         (int)wwnn[4],(int)wwnn[5],(int)wwnn[6],(int)wwnn[7],
+                         (int)wwpn[0],(int)wwpn[1],(int)wwpn[2],(int)wwpn[3],
+                         (int)wwpn[4],(int)wwpn[5],(int)wwpn[6],(int)wwpn[7]);
+}
+
+/**
+ * This function is called when userspace attempts to write the
+ * solidfire_temp_wwn file.  The expected format is "WWNN WWPN", for example
+ *     printf "1122334455667788 9988776655443322" > ./solidfire_temp_wwn
+ */
+static ssize_t
+solidfire_sysfs_temp_wwn_store(struct device *dev,
+                               struct device_attribute *attr, const char *buf,
+                               size_t count)
+{
+        scsi_qla_host_t *vha = shost_priv(class_to_shost(dev));
+        uint8_t wwnn[WWN_SIZE];
+        uint8_t wwpn[WWN_SIZE];
+        const char* pos;
+        int i;
+
+        /* The expected format is "WWNN WWPN". */
+        if (count != WWN_SIZE * 2 * 2 + 1)
+                return -EINVAL;
+
+        /* Parse the WWNN. */
+        for (i = 0, pos = buf; i < WWN_SIZE; ++i, pos += 2) {
+                if (sscanf(pos, "%2hhx", &wwnn[i]) != 1) {
+                        printk("SolidFire temporary WWN - CAN'T PARSE WWNN!\n");
+                        return -EINVAL;
+                }
+        }
+
+        /* Parse the WWPN. */
+        for (i = 0, pos = buf + WWN_SIZE * 2 + 1; i < WWN_SIZE; ++i, pos += 2) {
+                if (sscanf(pos, "%2hhx", &wwpn[i]) != 1) {
+                        printk("SolidFire temporary WWN - CAN'T PARSE WWPN!\n");
+                        return -EINVAL;
+                }
+        }
+
+        solidfire_set_temp_wwn(vha, wwnn, wwpn);
+        return count;
+}
+
+/**
+ * Determines whether or not a particular port has been configured to be online.
+ * A port is considered configured if qlt_lport_register has been called on it.
+ */
+static ssize_t
+solidfire_sysfs_configured_show(struct device *dev,
+                                struct device_attribute *attr, const char *buf,
+                                size_t count)
+{
+        scsi_qla_host_t *vha = shost_priv(class_to_shost(dev));
+        int configured = vha->vha_tgt.target_lport_ptr != NULL;
+        return scnprintf(buf, PAGE_SIZE, "%d", configured);
+}
+
+static DEVICE_ATTR(solidfire_temp_wwn, S_IWUSR | S_IRUGO,
+                   solidfire_sysfs_temp_wwn_show,
+                   solidfire_sysfs_temp_wwn_store);
+static DEVICE_ATTR(solidfire_configured, S_IRUGO,
+                   solidfire_sysfs_configured_show, NULL);
+#endif /* #ifdef SOLIDFIRE_TEMP_WWN */
+
+
 static struct sysfs_entry {
 	char *name;
 	struct bin_attribute *attr;
@@ -1590,6 +1820,10 @@ struct device_attribute *qla2x00_host_attrs[] = {
 	&dev_attr_fw_dump_size,
 	&dev_attr_allow_cna_fw_dump,
 	&dev_attr_pep_version,
+#ifdef SOLIDFIRE_TEMP_WWN
+        &dev_attr_solidfire_temp_wwn,
+        &dev_attr_solidfire_configured,
+#endif /* #ifdef SOLIDFIRE_TEMP_WWN */
 	NULL,
 };
 
