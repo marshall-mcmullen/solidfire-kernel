@@ -1785,6 +1785,10 @@ int scsi_decide_disposition(struct scsi_cmnd *scmd)
 		 * these commands if there is no device available.
 		 * other hosts report did_no_connect for the same thing.
 		 */
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                if (scmd->allowed == 0)
+                        return SUCCESS;
+#endif
 		if ((scmd->cmnd[0] == TEST_UNIT_READY ||
 		     scmd->cmnd[0] == INQUIRY)) {
 			return SUCCESS;

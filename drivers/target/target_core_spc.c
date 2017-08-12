@@ -108,12 +108,19 @@ spc_emulate_inquiry_std(struct se_cmd *cmd, unsigned char *buf)
 
 	buf[7] = 0x2; /* CmdQue=1 */
 
+#ifdef SOLIDFIRE_LUN
+        memcpy(&buf[8], "SolidFir", 8);
+        memcpy(&buf[16], "SSD SAN         ", 16);
+        memcpy(&buf[32], "0001", 4);
+#else
 	memcpy(&buf[8], "LIO-ORG ", 8);
 	memset(&buf[16], 0x20, 16);
 	memcpy(&buf[16], dev->t10_wwn.model,
 	       min_t(size_t, strlen(dev->t10_wwn.model), 16));
 	memcpy(&buf[32], dev->t10_wwn.revision,
 	       min_t(size_t, strlen(dev->t10_wwn.revision), 4));
+#endif /* #ifdef SOLIDFIRE_LUN */
+
 	buf[4] = 31; /* Set additional length to 31 */
 
 	return 0;
@@ -1239,9 +1246,26 @@ sense_reason_t spc_emulate_report_luns(struct se_cmd *cmd)
 		int_to_scsilun(deve->mapped_lun, &slun);
 		memcpy(buf + offset, &slun,
 		       min(8u, cmd->data_length - offset));
+#ifdef SOLIDFIRE_LUN
+                /* Enable the FLAT LUN ADDRESS METHOD = 01 */
+                if(deve->mapped_lun > 0xFF)
+                        buf[offset] = 0x40 | (buf[offset] & 0x3F);
+#endif /* #ifdef SOLIDFIRE_LUN */
+
 		offset += 8;
 	}
 	rcu_read_unlock();
+
+#ifdef SOLIDFIRE_LUN
+        /* This is the case where an initiator WWPN is provided in the ACL with */
+        /* no luns - you will get into this situation and respond to REPORT LUNS */
+        /* with all zeroes in the buffer */
+        if (!lun_count) {
+                int_to_scsilun(0, (struct scsi_lun *)&buf[offset]);
+                lun_count = 1;
+                goto done;
+        }
+#endif /* #ifdef SOLIDFIRE_LUN */
 
 	/*
 	 * See SPC3 r07, page 159.

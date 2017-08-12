@@ -21,6 +21,10 @@
 
 #include "qla_target.h"
 
+#ifdef SOLIDFIRE_TEMP_WWN
+extern void solidfire_free_temp_wwn(void);
+#endif /* #ifdef SOLIDFIRE_TEMP_WWN */
+
 /*
  * Driver version
  */
@@ -6450,6 +6454,11 @@ qla2x00_module_exit(void)
 		kmem_cache_destroy(ctx_cachep);
 	fc_release_transport(qla2xxx_transport_template);
 	fc_release_transport(qla2xxx_transport_vport_template);
+
+#ifdef SOLIDFIRE_TEMP_WWN
+        solidfire_free_temp_wwn();
+#endif /* #ifdef SOLIDFIRE_TEMP_WWN */
+
 }
 
 module_init(qla2x00_module_init);

@@ -61,6 +61,14 @@ module_param_named(debug_libiscsi_eh, iscsi_dbg_lib_eh, int,
 MODULE_PARM_DESC(debug_libiscsi_eh,
 		 "Turn on debugging for error handling in libiscsi module. "
 		 "Set to 1 to turn on, and zero to turn off. Default is off.");
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+static int iscsi_dbg_sf_session;
+module_param_named(debug_libiscsi_sf_session, iscsi_dbg_sf_session, int,
+                   S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(debug_libiscsi_session,
+                 "Turn on debugging for sessions in libiscsi module. "
+                 "Set to 1 to turn on, and zero to turn off. Default is off.");
+#endif
 
 #define ISCSI_DBG_CONN(_conn, dbg_fmt, arg...)			\
 	do {							\
@@ -85,6 +93,16 @@ MODULE_PARM_DESC(debug_libiscsi_eh,
 					     "%s " dbg_fmt,		\
 					     __func__, ##arg);		\
 	} while (0);
+
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+#define ISCSI_DBG_SF_SESSION(_session, dbg_fmt, arg...)                 \
+        do {                                                            \
+                if (iscsi_dbg_sf_session)                               \
+                        iscsi_session_printk(KERN_INFO, _session,       \
+                                             "%s " dbg_fmt,             \
+                                             __func__, ##arg);          \
+        } while (0);
+#endif
 
 inline void iscsi_conn_queue_work(struct iscsi_conn *conn)
 {
@@ -287,7 +305,16 @@ static int iscsi_check_tmf_restrictions(struct iscsi_task *task, int opcode)
 					  "task [op %x/%x itt "
 					  "0x%x/0x%x] "
 					  "rejected.\n",
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                                          /*
+                                           * case 17498: task->hdr can be NULL
+                                           * for iscsi_sw_tcp sessions
+                                           */
+                                          task->hdr ? task->hdr->opcode : 0,
+                                          opcode,
+#else
 					  task->hdr->opcode, opcode,
+#endif
 					  task->itt, task->hdr_itt);
 			return -EACCES;
 		}
@@ -299,7 +326,12 @@ static int iscsi_check_tmf_restrictions(struct iscsi_task *task, int opcode)
 			iscsi_conn_printk(KERN_INFO, conn,
 					  "task [op %x/%x itt "
 					  "0x%x/0x%x] fast abort.\n",
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                                          task->hdr ? task->hdr->opcode : 0,
+                                          opcode,
+#else
 					  task->hdr->opcode, opcode,
+#endif
 					  task->itt, task->hdr_itt);
 			return -EACCES;
 		}
@@ -510,8 +542,15 @@ static void iscsi_free_task(struct iscsi_task *task)
 		 * queue command may call this to free the task, so
 		 * it will decide how to return sc to scsi-ml.
 		 */
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                /* timeouts handled by block layer */
+                if (oldstate != ISCSI_TASK_REQUEUE_SCSIQ &&
+                                oldstate != ISCSI_TASK_TIMED_OUT)
+                        sc->scsi_done(sc);
+#else
 		if (oldstate != ISCSI_TASK_REQUEUE_SCSIQ)
 			sc->scsi_done(sc);
+#endif
 	}
 }
 
@@ -633,6 +672,10 @@ static void fail_scsi_task(struct iscsi_task *task, int err)
 		state = ISCSI_TASK_COMPLETED;
 	} else if (err == DID_TRANSPORT_DISRUPTED)
 		state = ISCSI_TASK_ABRT_SESS_RECOV;
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        else if (err == DID_TIME_OUT)
+                state = ISCSI_TASK_TIMED_OUT;
+#endif
 	else
 		state = ISCSI_TASK_ABRT_TMF;
 
@@ -1414,6 +1457,14 @@ void iscsi_conn_failure(struct iscsi_conn *conn, enum iscsi_err err)
 		return;
 	}
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        ISCSI_DBG_SF_SESSION(session, "%s state=%d stop_stage=%d "
+                        "targetname=%s err=%d\n",
+                        __func__, session->state, conn->stop_stage,
+                        session->targetname ? session->targetname : "None",
+                        err);
+#endif
+
 	if (conn->stop_stage == 0)
 		session->state = ISCSI_STATE_FAILED;
 	spin_unlock_bh(&session->frwd_lock);
@@ -1550,6 +1601,16 @@ check_mgmt:
 		list_del_init(&conn->task->running);
 		spin_unlock_bh(&conn->taskqueuelock);
 		if (conn->session->state == ISCSI_STATE_LOGGING_OUT) {
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                        if (conn->session->sessfail_fast) {
+                                struct iscsi_task *t = conn->task;
+                                /* No retries */
+                                if (t->sc && t->sc->allowed != 0)
+                                        t->sc->retries = t->sc->allowed;
+                                fail_scsi_task(t, DID_SOFT_ERROR);
+                                continue;
+                        }
+#endif
 			fail_scsi_task(conn->task, DID_IMM_RETRY);
 			spin_lock_bh(&conn->taskqueuelock);
 			continue;
@@ -1683,6 +1744,22 @@ int iscsi_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *sc)
 
 	reason = iscsi_session_chkready(cls_session);
 	if (reason) {
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                /*
+                 * For sessions with sessfail_fast set the code so it wont be
+                 * retried.  In case this didn't come from pscsi, max out
+                 * the retries counter to prevent any retry attempts
+                 * in scsi_softirq_done().
+                 */
+                if (session->sessfail_fast) {
+                        sc->result = DID_SOFT_ERROR << 16;
+                        if (sc->allowed != 0)
+                                sc->retries = sc->allowed;
+                        if (sc->sense_buffer)
+                                sc->sense_buffer[0] = 0;
+                        goto fault;
+                }
+#endif
 		sc->result = reason;
 		goto fault;
 	}
@@ -1694,6 +1771,20 @@ int iscsi_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *sc)
 		 * be entering our queuecommand while a block is starting
 		 * up because the block code is not locked)
 		 */
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                if (session->sessfail_fast) {
+                        /* bypass checks below, DID_NO_CONNECT not retryable */
+                        reason = FAILURE_SESSION_NOT_READY;
+                        sc->result = DID_SOFT_ERROR << 16;
+                        /* fix up for scsi_sense_valid() */
+                        if (sc->sense_buffer)
+                                sc->sense_buffer[0] = 0;
+                        /* No retries */
+                        if (sc->allowed != 0)
+                                sc->retries = sc->allowed;
+                        goto fault;
+                }
+#endif
 		switch (session->state) {
 		case ISCSI_STATE_FAILED:
 		case ISCSI_STATE_IN_RECOVERY:
@@ -1719,6 +1810,15 @@ int iscsi_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *sc)
 		goto fault;
 	}
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        /*
+         * fix up for scsi_sense_valid() - this may be needed because sense
+         * buffer is not zalloced.  The check in scsi_sense_valid() looks
+         * at first byte of sense buffer.
+         */
+        if (sc->sense_buffer)
+                sc->sense_buffer[0] = 0;
+#endif
 	conn = session->leadconn;
 	if (!conn) {
 		reason = FAILURE_SESSION_FREED;
@@ -1728,11 +1828,33 @@ int iscsi_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *sc)
 
 	if (test_bit(ISCSI_SUSPEND_BIT, &conn->suspend_tx)) {
 		reason = FAILURE_SESSION_IN_RECOVERY;
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                if (session->sessfail_fast) {
+                        sc->result = DID_SOFT_ERROR << 16;
+                        goto fault;
+                }
+#endif
 		sc->result = DID_REQUEUE;
 		goto fault;
 	}
 
 	if (iscsi_check_cmdsn_window_closed(conn)) {
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                /*
+                 * Don't want to queue request on the request_queue if the
+                 * cmdsn window is closed.  This can lead to issues where
+                 * live but non responsive targets build up a long queue
+                 * of waiting requests while live requests in the window
+                 * are stuck waiting to time out.  The blkdev time out
+                 * mechanism only applies to requests that are live in the
+                 * scsi_device.
+                 */
+                if (session->sessfail_fast) {
+                        reason = FAILURE_WINDOW_CLOSED;
+                        sc->result = DID_PASSTHROUGH << 16 | SAM_STAT_BUSY;
+                        goto fault;
+                }
+#endif
 		reason = FAILURE_WINDOW_CLOSED;
 		goto reject;
 	}
@@ -1804,6 +1926,43 @@ int iscsi_target_alloc(struct scsi_target *starget)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(iscsi_target_alloc);
+
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+/**
+ * SolidFire-specific code that determines whether or not partitions should be
+ * scanned for a particular iSCSI session.  We don't want partitions to be
+ * scanned for iSCSI sessions initiated by FC Nodes because the FC node is just
+ * a passthrough device and doesn't care about what partitions are on the
+ * device.  So, we check to see if this iSCSI host's initiator name matches the
+ * FC Node initiator pattern, and if it does we inhibit the partition scan.
+ *
+ * @param sdev The scsi_device representing the iSCSI session being queried.
+ *
+ * @return 1 if partitions should be scanned, 0 if partitions should not be
+ *         scanned.
+ */
+int iscsi_should_scan_for_partitions(struct scsi_device *sdev)
+{
+        struct scsi_target *starget;
+        struct iscsi_cls_session *cls_session;
+        struct iscsi_session *session;
+
+        if (!(starget = sdev->sdev_target))
+                return 1;
+        if (!(cls_session = starget_to_session(starget)))
+                return 1;
+        if (!(session = cls_session->dd_data))
+                return 1;
+        if (!session->initiatorname || strlen(session->initiatorname) < 37)
+                return 1;
+        if (strncmp(session->initiatorname, "iqn.2010-01.com.solidfire:", 26) != 0)
+                return 1;
+        if (strncmp(session->initiatorname + 30, ".v2:fc", 6) != 0)
+                return 1;
+        return 0;
+}
+EXPORT_SYMBOL_GPL(iscsi_should_scan_for_partitions);
+#endif
 
 static void iscsi_tmf_timedout(unsigned long data)
 {
@@ -1954,6 +2113,40 @@ static int iscsi_has_ping_timed_out(struct iscsi_conn *conn)
 		return 0;
 }
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+static void blk_eh_cmd_work(struct work_struct *work)
+{
+        struct iscsi_conn *conn =
+                container_of(work, struct iscsi_conn, blk_eh_work);
+        struct iscsi_session *session;
+        struct iscsi_cls_session *cls_session;
+
+        session = conn->session;
+        cls_session = session->cls_session;
+        ISCSI_DBG_EH(session,
+                "%s: call iscsi_conn_error_event conn=%p\n",
+                __func__, conn);
+        /*
+         * This should result in calling iscsi_sw_tcp_conn_stop()
+         * this will close the socket and call iscsi_conn_stop() and that
+         * calls iscsi_start_session_recovery() which will fail all tasks in
+         * the session with DID_TRANSPORT_DISRUPTED.  This could have been
+         * done directly, but the scsi timeout error handler isn't equipped
+         * to deal with tasks completing with something other than a timeout.
+         * Other transport types haven't been tested.
+         */
+        if (cls_session->transport->stop_conn) {
+                cls_session->transport->stop_conn(conn->cls_conn,
+                                STOP_CONN_RECOVER);
+        }
+        iscsi_conn_error_event(conn->cls_conn,
+                        ISCSI_ERR_SCSI_EH_SESSION_RST);
+        spin_lock(&session->frwd_lock);
+        session->timer_set = 0;
+        spin_unlock(&session->frwd_lock);
+}
+#endif
+
 enum blk_eh_timer_return iscsi_eh_cmd_timed_out(struct scsi_cmnd *sc)
 {
 	enum blk_eh_timer_return rc = BLK_EH_NOT_HANDLED;
@@ -1978,6 +2171,47 @@ enum blk_eh_timer_return iscsi_eh_cmd_timed_out(struct scsi_cmnd *sc)
 		rc = BLK_EH_HANDLED;
 		goto done;
 	}
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        /*
+         * Do timeout processing here if sessfail_fast set and two timeouts on
+         * the task.
+         * Need to tarminate the connection if task has been stuck too long
+         * The call to iscsi_conn_error_event will result in closing the
+         * underlying socket and at that time all SCSI tasks will be completed
+         * with a check condition.  Can't just fail the task here because
+         * there could be data_out pending in the socket buffer.
+         * If somehow there is no leading connection, fail the task here
+         * block layer does most of the work.
+         */
+        if (session->sessfail_fast) {
+                if (!task->have_checked_conn) {
+                        task->have_checked_conn = true;
+                        rc = BLK_EH_RESET_TIMER;
+                } else {
+                        conn = session->leadconn;
+                        if (unlikely(!conn)) {
+                                fail_scsi_task(task, DID_TIME_OUT);
+                                rc = BLK_EH_HANDLED;
+                        } else if (!session->timer_set) {
+                                /* only allow one of these for the session
+                                 * since the actions taken affect all tasks
+                                 * in the session.  Run asynchronously,
+                                 * this allows the SCSI timer mechanism to
+                                 * function normally
+                                 */
+                                ISCSI_DBG_EH(session,
+                                        "%s: set delayed work for conn %p\n",
+                                        __func__, conn);
+                                session->timer_set = 1;
+                                schedule_work(&conn->blk_eh_work);
+                                rc = BLK_EH_RESET_TIMER;
+                        } else {
+                                rc = BLK_EH_RESET_TIMER;
+                        }
+                }
+                goto done;
+        }
+#endif
 
 	if (session->state != ISCSI_STATE_LOGGED_IN) {
 		/*
@@ -2161,6 +2395,31 @@ int iscsi_eh_abort(struct scsi_cmnd *sc)
 
 	mutex_lock(&session->eh_mutex);
 	spin_lock_bh(&session->frwd_lock);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        /*
+         * Special treatment for pass through from PSCSI - uses undefined bit
+         * in eh_eflags to distinguish.
+         */
+        if (sc && (sc->eh_eflags &0x10000) && session->sessfail_fast) {
+                if (!session->timer_set) {
+                        /*
+                         * Only allow one of these in the session.
+                         * The actions taken affect all tasks
+                         * in the session.  Run asynchronously,
+                         * the abort handler waits for the task to
+                         * complete.
+                         */
+                        ISCSI_DBG_EH(session,
+                                "%s: set delayed work for conn %p\n",
+                                __func__, session->leadconn);
+                        session->timer_set = 1;
+                        schedule_work(&session->leadconn->blk_eh_work);
+                }
+                spin_unlock_bh(&session->frwd_lock);
+                mutex_unlock(&session->eh_mutex);
+                return SUCCESS;
+        }
+#endif
 	/*
 	 * if session was ISCSI_STATE_IN_RECOVERY then we may not have
 	 * got the command.
@@ -2363,6 +2622,11 @@ void iscsi_session_recovery_timedout(struct iscsi_cls_session *cls_session)
 
 	spin_lock_bh(&session->frwd_lock);
 	if (session->state != ISCSI_STATE_LOGGED_IN) {
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                ISCSI_DBG_SF_SESSION(session, "%s state=%d=>%d targetname=%s\n",
+                        __func__, session->state, ISCSI_STATE_TERMINATE,
+                        session->targetname ? session->targetname : "None");
+#endif
 		session->state = ISCSI_STATE_RECOVERY_FAILED;
 		if (session->leadconn)
 			wake_up(&session->leadconn->ehwait);
@@ -2637,7 +2901,11 @@ struct Scsi_Host *iscsi_host_alloc(struct scsi_host_template *sht,
 	if (xmit_can_sleep) {
 		snprintf(ihost->workq_name, sizeof(ihost->workq_name),
 			"iscsi_q_%d", shost->host_no);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                ihost->workq = alloc_workqueue(ihost->workq_name, WQ_HIGHPRI | WQ_UNBOUND | WQ_MEM_RECLAIM, 1);
+#else
 		ihost->workq = create_singlethread_workqueue(ihost->workq_name);
+#endif
 		if (!ihost->workq)
 			goto free_host;
 	}
@@ -2913,6 +3181,10 @@ iscsi_conn_setup(struct iscsi_cls_session *cls_session, int dd_size,
 	conn->exp_statsn = 0;
 	conn->tmf_state = TMF_INITIAL;
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        INIT_WORK(&conn->blk_eh_work, blk_eh_cmd_work);
+#endif
+
 	init_timer(&conn->transport_timer);
 	conn->transport_timer.data = (unsigned long)conn;
 	conn->transport_timer.function = iscsi_check_transport_timeouts;
@@ -2974,6 +3246,11 @@ void iscsi_conn_teardown(struct iscsi_cls_conn *cls_conn)
 		/*
 		 * leading connection? then give up on recovery.
 		 */
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                ISCSI_DBG_SF_SESSION(session, "%s state=%d=>%d targetname=%s\n",
+                        __func__, session->state, ISCSI_STATE_TERMINATE,
+                        session->targetname ? session->targetname : "None");
+#endif
 		session->state = ISCSI_STATE_TERMINATE;
 		wake_up(&conn->ehwait);
 	}
@@ -3032,6 +3309,12 @@ int iscsi_conn_start(struct iscsi_cls_conn *cls_conn)
 		conn->ping_timeout = 5;
 	}
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        ISCSI_DBG_SF_SESSION(session, "%s state=%d, going to %d "
+                        "targetname=%s\n",
+                        __func__, session->state, ISCSI_STATE_LOGGED_IN,
+                        session->targetname ? session->targetname : "None");
+#endif
 	spin_lock_bh(&session->frwd_lock);
 	conn->c_stage = ISCSI_CONN_STARTED;
 	session->state = ISCSI_STATE_LOGGED_IN;
@@ -3107,6 +3390,13 @@ static void iscsi_start_session_recovery(struct iscsi_session *session,
 		return;
 	}
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        ISCSI_DBG_SF_SESSION(session, "%s state=%d=>%d targetname=%s\n",
+                        __func__, session->state,
+                        flag == STOP_CONN_TERM ?
+                                ISCSI_STATE_TERMINATE : ISCSI_STATE_IN_RECOVERY,
+                        session->targetname ? session->targetname : "None");
+#endif
 	/*
 	 * When this is called for the in_login state, we only want to clean
 	 * up the login task and connection. We do not need to block and set
@@ -3140,6 +3430,10 @@ static void iscsi_start_session_recovery(struct iscsi_session *session,
 		if (session->state == ISCSI_STATE_IN_RECOVERY &&
 		    old_stop_stage != STOP_CONN_RECOVER) {
 			ISCSI_DBG_SESSION(session, "blocking session\n");
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                        session->cls_session->sessfail_fast =
+                                session->sessfail_fast;
+#endif
 			iscsi_block_session(session->cls_session);
 		}
 	}
@@ -3211,12 +3505,36 @@ int iscsi_switch_str_param(char **param, char *new_val_buf)
 }
 EXPORT_SYMBOL_GPL(iscsi_switch_str_param);
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+/*
+ * Check the initiator IQN for immediate failure on session that
+ * is not connected.  This prevents situation where disconnected session
+ * queues up request in reqeust queue with no retry counter checking.  Result
+ * of this can be hung task panics on task aborts or teardown.
+ * search for format: iqn.2010-01.com.solidfire:XXXX.fcN.XX...
+ * This is also used on when session goes into failed state to protect against
+ * slow processing of many simultaneous session failures by iscsid.
+ */
+static int iscsi_fail_immediate(struct iscsi_session *session)
+{
+        char *p;
+
+        p = strstr(session->initiatorname, "solidfire");
+        if (p && strstr(p + 9, "fc"))
+                return 1;
+        return 0;
+}
+#endif
+
 int iscsi_set_param(struct iscsi_cls_conn *cls_conn,
 		    enum iscsi_param param, char *buf, int buflen)
 {
 	struct iscsi_conn *conn = cls_conn->dd_data;
 	struct iscsi_session *session = conn->session;
 	int val;
+#ifdef CONFIG_SOLIDFIRE_ISCSI 
+	int ret;
+#endif
 
 	switch(param) {
 	case ISCSI_PARAM_FAST_ABORT:
@@ -3300,6 +3618,14 @@ int iscsi_set_param(struct iscsi_cls_conn *cls_conn,
 		return iscsi_switch_str_param(&session->ifacename, buf);
 	case ISCSI_PARAM_INITIATOR_NAME:
 		return iscsi_switch_str_param(&session->initiatorname, buf);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+                ret = iscsi_switch_str_param(&session->initiatorname, buf);
+                if (ret == 0) {
+                        session->sessfail_fast = iscsi_fail_immediate(session);
+                }
+#else
+		return iscsi_switch_str_param(&session->initiatorname, buf);
+#endif
 	case ISCSI_PARAM_BOOT_ROOT:
 		return iscsi_switch_str_param(&session->boot_root, buf);
 	case ISCSI_PARAM_BOOT_NIC:

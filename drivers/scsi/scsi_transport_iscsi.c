@@ -1604,9 +1604,24 @@ static DECLARE_TRANSPORT_CLASS(iscsi_connection_class,
 static struct sock *nls;
 static DEFINE_MUTEX(rx_queue_mutex);
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+#define ISCSI_HLIST_BITS 14
+#endif
+
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+static DEFINE_HASHTABLE(sesshash, ISCSI_HLIST_BITS);
+#else
 static LIST_HEAD(sesslist);
+#endif
+
 static DEFINE_SPINLOCK(sesslock);
+
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+static DEFINE_HASHTABLE(connhash, ISCSI_HLIST_BITS);
+#else
 static LIST_HEAD(connlist);
+#endif
+
 static DEFINE_SPINLOCK(connlock);
 
 static uint32_t iscsi_conn_get_sid(struct iscsi_cls_conn *conn)
@@ -1622,9 +1637,16 @@ static struct iscsi_cls_session *iscsi_session_lookup(uint32_t sid)
 {
 	unsigned long flags;
 	struct iscsi_cls_session *sess;
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        //struct hlist_node *node;
+#endif
 
 	spin_lock_irqsave(&sesslock, flags);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        hash_for_each_possible(sesshash, sess, sess_hlist, sid) {
+#else
 	list_for_each_entry(sess, &sesslist, sess_list) {
+#endif
 		if (sess->sid == sid) {
 			spin_unlock_irqrestore(&sesslock, flags);
 			return sess;
@@ -1641,9 +1663,16 @@ static struct iscsi_cls_conn *iscsi_conn_lookup(uint32_t sid, uint32_t cid)
 {
 	unsigned long flags;
 	struct iscsi_cls_conn *conn;
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        //struct hlist_node *node;
+#endif
 
 	spin_lock_irqsave(&connlock, flags);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        hash_for_each_possible(connhash, conn, conn_hlist, sid) {
+#else
 	list_for_each_entry(conn, &connlist, conn_list) {
+#endif
 		if ((conn->cid == cid) && (iscsi_conn_get_sid(conn) == sid)) {
 			spin_unlock_irqrestore(&connlock, flags);
 			return conn;
@@ -1976,7 +2005,19 @@ static void __iscsi_block_session(struct work_struct *work)
 	spin_lock_irqsave(&session->lock, flags);
 	session->state = ISCSI_SESSION_FAILED;
 	spin_unlock_irqrestore(&session->lock, flags);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        /*
+         * Solidfire FC sessions don't want scsi_dev to be in blocked
+         * state.  When the session is in FAILED/RECOVERY state incoming
+         * SCSI tasks need to be rejected by iscsi_queuecommand.  Otherwise
+         * they can become blocked for long enough to trigger hung task
+         * panic on task aborts from the initiator.
+         */
+        if (!session->sessfail_fast)
+                scsi_target_block(&session->dev);
+#else
 	scsi_target_block(&session->dev);
+#endif
 	ISCSI_DBG_TRANS_SESSION(session, "Completed SCSI target blocking\n");
 	if (session->recovery_tmo >= 0)
 		queue_delayed_work(iscsi_eh_timer_workq,
@@ -2041,7 +2082,11 @@ iscsi_alloc_session(struct Scsi_Host *shost, struct iscsi_transport *transport,
 	session->recovery_tmo_sysfs_override = false;
 	session->state = ISCSI_SESSION_FREE;
 	INIT_DELAYED_WORK(&session->recovery_work, session_recovery_timedout);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        INIT_HLIST_NODE(&session->sess_hlist);
+#else
 	INIT_LIST_HEAD(&session->sess_list);
+#endif
 	INIT_WORK(&session->unblock_work, __iscsi_unblock_session);
 	INIT_WORK(&session->block_work, __iscsi_block_session);
 	INIT_WORK(&session->unbind_work, __iscsi_unbind_session);
@@ -2092,7 +2137,11 @@ int iscsi_add_session(struct iscsi_cls_session *session, unsigned int target_id)
 	transport_register_device(&session->dev);
 
 	spin_lock_irqsave(&sesslock, flags);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        hash_add(sesshash, &session->sess_hlist, session->sid);
+#else
 	list_add(&session->sess_list, &sesslist);
+#endif
 	spin_unlock_irqrestore(&sesslock, flags);
 
 	iscsi_session_event(session, ISCSI_KEVENT_CREATE_SESSION);
@@ -2164,7 +2213,11 @@ void iscsi_remove_session(struct iscsi_cls_session *session)
 	ISCSI_DBG_TRANS_SESSION(session, "Removing session\n");
 
 	spin_lock_irqsave(&sesslock, flags);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        hash_del(&session->sess_hlist);
+#else
 	list_del(&session->sess_list);
+#endif
 	spin_unlock_irqrestore(&sesslock, flags);
 
 	/* make sure there are no blocks/unblocks queued */
@@ -2256,7 +2309,11 @@ iscsi_create_conn(struct iscsi_cls_session *session, int dd_size, uint32_t cid)
 		conn->dd_data = &conn[1];
 
 	mutex_init(&conn->ep_mutex);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        INIT_HLIST_NODE(&conn->conn_hlist);
+#else
 	INIT_LIST_HEAD(&conn->conn_list);
+#endif
 	conn->transport = transport;
 	conn->cid = cid;
 
@@ -2276,7 +2333,11 @@ iscsi_create_conn(struct iscsi_cls_session *session, int dd_size, uint32_t cid)
 	transport_register_device(&conn->dev);
 
 	spin_lock_irqsave(&connlock, flags);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        hash_add(connhash, &conn->conn_hlist, session->sid);
+#else
 	list_add(&conn->conn_list, &connlist);
+#endif
 	spin_unlock_irqrestore(&connlock, flags);
 
 	ISCSI_DBG_TRANS_CONN(conn, "Completed conn creation\n");
@@ -2302,7 +2363,11 @@ int iscsi_destroy_conn(struct iscsi_cls_conn *conn)
 	unsigned long flags;
 
 	spin_lock_irqsave(&connlock, flags);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        hash_del(&conn->conn_hlist);
+#else
 	list_del(&conn->conn_list);
+#endif
 	spin_unlock_irqrestore(&connlock, flags);
 
 	transport_unregister_device(&conn->dev);

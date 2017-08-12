@@ -39,6 +39,7 @@
 #include "target_core_internal.h"
 #include "target_core_alua.h"
 #include "target_core_pr.h"
+#include "target_core_ua.h"
 
 #define TF_CIT_SETUP(_name, _item_ops, _group_ops, _attrs)		\
 static void target_fabric_setup_##_name##_cit(struct target_fabric_configfs *tf) \
@@ -275,8 +276,15 @@ static struct config_group *target_fabric_make_mappedlun(
 	struct target_fabric_configfs *tf = se_tpg->se_tpg_wwn->wwn_tf;
 	struct se_lun_acl *lacl = NULL;
 	char *buf;
-	unsigned long long mapped_lun;
+	unsigned long mapped_lun;
 	int ret = 0;
+#ifdef CONFIG_SOLIDFIRE_LIO
+	uint64_t solidfire_lun;
+	size_t name_len;
+	int i = 0, j = 0, k= 0;
+
+        name_len = strlen(name);
+#endif
 
 	buf = kzalloc(strlen(name) + 1, GFP_KERNEL);
 	if (!buf) {
@@ -297,7 +305,62 @@ static struct config_group *target_fabric_make_mappedlun(
 	 * Determine the Mapped LUN value.  This is what the SCSI Initiator
 	 * Port will actually see.
 	 */
-	ret = kstrtoull(buf + 4, 0, &mapped_lun);
+#ifdef CONFIG_SOLIDFIRE_LIO
+        // We need to parse some values out of the name of this configfs node.
+        // The name looks like lun_11:22:33:44:55:66:77:88_0_1_2_X_Y
+        // Where X is the LUN value we will send over the SolidFire iSCSI
+        // session and where Y is the LUN value we will send to the Fibre
+        // Channel client.
+
+        // Find the position of the last underscore and store its position in
+        // j.
+        for (i = name_len; i >= 0; --i) {
+                if (buf[i] == '_') {
+                        j = i;
+                        break;
+                }
+        }
+        if (j == 0) {
+                pr_err("Malformed name. Can't find last underscore in %s\n",
+                       buf);
+                goto out;
+        }
+
+        // Find the position of the next to last underscore and store its
+        // position in k.
+        for (i = j - 1; i >= 0; --i) {
+                if (buf[i] == '_') {
+                        k = i;
+                        break;
+                }
+        }
+        if (k == 0) {
+                pr_err("Malformed name. Can't find second to last underscore "
+                       "in %s\n", buf);
+                goto out;
+        }
+
+        // Change the last underscore to a null so we can do kstrtoull in the
+        // middle of the string.
+        //
+        // BEFORE: ..._0123 UNDERSCORE 0123
+        // AFTER:  ..._0123    NULL    0123
+        //             ^kstrtoull      ^kstrtoul
+        buf[j] = '\0';
+
+        ret = kstrtoul(buf + j + 1, 0, &mapped_lun);
+        if (ret)
+                goto out;
+
+        ret = kstrtoull(buf + k + 1, 0, &solidfire_lun);
+        if (ret)
+                goto out;
+
+        // Change the string back to what it was.
+        buf[j] = '_';
+#else
+        ret = kstrtoul(buf + 4, 0, &mapped_lun);
+#endif
 	if (ret)
 		goto out;
 
@@ -318,6 +381,32 @@ static struct config_group *target_fabric_make_mappedlun(
 
 	target_stat_setup_mappedlun_default_groups(lacl);
 
+#ifdef CONFIG_SOLIDFIRE_LIO
+        //spin_lock_irq(&se_nacl->device_list_lock);
+
+        // Generate a UA for REPORTED LUNS DATA CHANGE for every other LUN the
+        // initiator has access to.
+        for (i = 0; i < TRANSPORT_MAX_LUNS_PER_TPG; ++i)
+        {
+                if (!se_nacl->lun_allocation_map[i]) {
+                        continue;
+                }
+                //spin_unlock_irq(&se_nacl->device_list_lock);
+                target_ua_allocate_lun(se_nacl, i, 0x3f, 0xe);
+                //spin_lock_irq(&se_nacl->device_list_lock);
+        }
+
+        if (se_nacl->lun_allocation_map[mapped_lun]) {
+                pr_err("Mapped LUN: %lu already allocated.\n", mapped_lun);
+                //spin_unlock_irq(&se_nacl->device_list_lock);
+                ret = -EINVAL;
+                goto out;
+        }
+        se_nacl->lun_allocation_map[mapped_lun] = 1;
+
+        //spin_unlock_irq(&se_nacl->device_list_lock);
+#endif
+
 	kfree(buf);
 	return &lacl->se_lun_group;
 out:
@@ -332,10 +421,37 @@ static void target_fabric_drop_mappedlun(
 {
 	struct se_lun_acl *lacl = container_of(to_config_group(item),
 			struct se_lun_acl, se_lun_group);
+#ifdef CONFIG_SOLIDFIRE_LIO
+	struct se_node_acl *nacl = lacl->se_lun_nacl;
+        int i;
+#endif
 
 	configfs_remove_default_groups(&lacl->ml_stat_grps.stat_group);
 	configfs_remove_default_groups(&lacl->se_lun_group);
 
+#ifdef CONFIG_SOLIDFIRE_LIO
+        //spin_lock_irq(&nacl->device_list_lock);
+
+        // Mark this LUN as free in the lun allocation map.
+        if (!nacl->lun_allocation_map[lacl->mapped_lun]) {
+                pr_err("Mapped LUN: %llu already deallocated.\n",
+                       lacl->mapped_lun);
+        }
+        nacl->lun_allocation_map[lacl->mapped_lun] = 0;
+
+        // Generate a UA for REPORTED LUNS DATA CHANGE for every other LUN the
+        // initiator has access to.
+        for (i = 0; i < TRANSPORT_MAX_LUNS_PER_TPG; ++i)
+        {
+                if (!nacl->lun_allocation_map[i]) {
+                        continue;
+                }
+                //spin_unlock_irq(&nacl->device_list_lock);
+                target_ua_allocate_lun(nacl, i, 0x3f, 0xe);
+                //spin_lock_irq(&nacl->device_list_lock);
+        }
+        //spin_unlock_irq(&nacl->device_list_lock);
+#endif
 	config_item_put(item);
 }
 
@@ -748,6 +864,12 @@ static struct config_group *target_fabric_make_lun(
 	struct se_portal_group *se_tpg = container_of(group,
 			struct se_portal_group, tpg_lun_group);
 	struct target_fabric_configfs *tf = se_tpg->se_tpg_wwn->wwn_tf;
+#ifdef CONFIG_SOLIDFIRE_LIO
+	size_t name_len;
+	int i = 0, j = 0;
+	unsigned long mapped_lun;
+	char *buf;
+#endif
 	unsigned long long unpacked_lun;
 	int errno;
 
@@ -756,9 +878,49 @@ static struct config_group *target_fabric_make_lun(
 				" \"lun_$LUN_NUMBER\"\n");
 		return ERR_PTR(-EINVAL);
 	}
+
+#ifdef CONFIG_SOLIDFIRE_LIO
+
+        name_len = strlen(name);
+
+        buf = kzalloc(strlen(name) + 1, GFP_KERNEL);
+        if (!buf) {
+                pr_err("Unable to allocate memory for name buf\n");
+                return ERR_PTR(-ENOMEM);
+        }
+
+        snprintf(buf, strlen(name) + 1, "%s", name);
+
+        for (i = name_len; i >= 0; --i) {
+                if (buf[i] == '_') {
+                        j = i;
+                        break;
+                }
+        }
+
+        if (j == 0) {
+                pr_err("Malformed name. Can't find last underscore in %s\n", buf);
+		kfree(buf);
+		return ERR_PTR(-EINVAL);
+        }
+
+        buf[j] = '\0';
+
+        errno = kstrtoul(buf + j + 1, 0, &mapped_lun);
+        if (errno)
+	{
+                pr_err(" Can't convert lun number %s\n", buf);
+		kfree(buf);
+		return ERR_PTR(errno);
+	}
+
+	unpacked_lun = mapped_lun;
+        kfree(buf);
+#else
 	errno = kstrtoull(name + 4, 0, &unpacked_lun);
 	if (errno)
 		return ERR_PTR(errno);
+#endif
 
 	lun = core_tpg_alloc_lun(se_tpg, unpacked_lun);
 	if (IS_ERR(lun))
@@ -783,6 +945,8 @@ static void target_fabric_drop_lun(
 {
 	struct se_lun *lun = container_of(to_config_group(item),
 				struct se_lun, lun_group);
+
+	//no need to make the change here
 
 	configfs_remove_default_groups(&lun->port_stat_grps.stat_group);
 	configfs_remove_default_groups(&lun->lun_group);

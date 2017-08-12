@@ -336,6 +336,13 @@ static void tcm_qla2xxx_release_cmd(struct se_cmd *se_cmd)
 	}
 
 	cmd = container_of(se_cmd, struct qla_tgt_cmd, se_cmd);
+#ifdef CONFIG_SOLIDFIRE_LIO
+        if (unlikely(se_cmd->se_sess == NULL)) {
+                printk(KERN_ALERT "Possible stuck se_cmd=%p Finished\n",
+                                        se_cmd);
+                cmd->sess = NULL;
+        }
+#endif
 	qlt_free_cmd(cmd);
 }
 

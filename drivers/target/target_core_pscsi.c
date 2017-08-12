@@ -47,6 +47,17 @@
 #include "target_core_internal.h"
 #include "target_core_pscsi.h"
 
+/* sense bytes for reset rejected cmnds SK, ASC, ASCQ */
+#define SOLIDFIRE_SENSE_PARAM(name, value, desc) \
+        static int pscsi_reset_##name = value; \
+        module_param_named(pscsi_reset_##name, pscsi_reset_##name, int, \
+                S_IRUGO | S_IWUSR); \
+        MODULE_PARM_DESC(pscsi_reset_##name, desc);
+
+SOLIDFIRE_SENSE_PARAM(sense_key, 0x02, "The sense key to return by default on errors. (4 bits)");
+SOLIDFIRE_SENSE_PARAM(asc,       0x04, "The additional sense code to return by default on errors. (8 bits)");
+SOLIDFIRE_SENSE_PARAM(ascq,      0x01, "The additional sense code qualifier to return by default on errors. (8 bits)");
+
 #define ISPRINT(a)  ((a >= ' ') && (a <= '~'))
 
 static inline struct pscsi_dev_virt *PSCSI_DEV(struct se_device *dev)
@@ -370,9 +381,13 @@ static int pscsi_create_type_disk(struct se_device *dev, struct scsi_device *sd)
 	__releases(sh->host_lock)
 {
 	struct pscsi_hba_virt *phv = dev->se_hba->hba_ptr;
+#ifndef CONFIG_SOLIDFIRE_LIO
 	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
+#endif
 	struct Scsi_Host *sh = sd->host;
+#ifndef CONFIG_SOLIDFIRE_LIO
 	struct block_device *bd;
+#endif
 	int ret;
 
 	if (scsi_device_get(sd)) {
@@ -382,6 +397,8 @@ static int pscsi_create_type_disk(struct se_device *dev, struct scsi_device *sd)
 		return -EIO;
 	}
 	spin_unlock_irq(sh->host_lock);
+
+#ifndef CONFIG_SOLIDFIRE_LIO
 	/*
 	 * Claim exclusive struct block_device access to struct scsi_device
 	 * for TYPE_DISK using supplied udev_path
@@ -394,10 +411,13 @@ static int pscsi_create_type_disk(struct se_device *dev, struct scsi_device *sd)
 		return PTR_ERR(bd);
 	}
 	pdv->pdv_bd = bd;
+#endif
 
 	ret = pscsi_add_device_to_list(dev, sd);
 	if (ret) {
+#ifndef CONFIG_SOLIDFIRE_LIO
 		blkdev_put(pdv->pdv_bd, FMODE_WRITE|FMODE_READ|FMODE_EXCL);
+#endif
 		scsi_device_put(sd);
 		return ret;
 	}
@@ -465,6 +485,8 @@ static int pscsi_configure_device(struct se_device *dev)
 				" Scsi_Host for PHV_LLD_SCSI_HOST_NO\n");
 			return -ENODEV;
 		}
+
+#ifndef CONFIG_SOLIDFIRE_LIO
 		/*
 		 * For the newer PHV_VIRTUAL_HOST_ID struct scsi_device
 		 * reference, we enforce that udev_path has been set
@@ -474,6 +496,8 @@ static int pscsi_configure_device(struct se_device *dev)
 				" been set before ENABLE=1\n");
 			return -EINVAL;
 		}
+#endif
+
 		/*
 		 * If no scsi_host_id= was passed for PHV_VIRTUAL_HOST_ID,
 		 * use the original TCM hba ID to reference Linux/SCSI Host No
@@ -571,6 +595,7 @@ static void pscsi_free_device(struct se_device *dev)
 	struct scsi_device *sd = pdv->pdv_sd;
 
 	if (sd) {
+#ifndef CONFIG_SOLIDFIRE_LIO
 		/*
 		 * Release exclusive pSCSI internal struct block_device claim for
 		 * struct scsi_device with TYPE_DISK from pscsi_create_type_disk()
@@ -580,6 +605,7 @@ static void pscsi_free_device(struct se_device *dev)
 				   FMODE_WRITE|FMODE_READ|FMODE_EXCL);
 			pdv->pdv_bd = NULL;
 		}
+#endif
 		/*
 		 * For HBA mode PHV_LLD_SCSI_HOST_NO, release the reference
 		 * to struct Scsi_Host now.
@@ -605,6 +631,9 @@ static void pscsi_transport_complete(struct se_cmd *cmd, struct scatterlist *sg,
 	int result;
 	struct pscsi_plugin_task *pt = cmd->priv;
 	unsigned char *cdb;
+#ifdef CONFIG_SOLIDFIRE_LIO
+        struct scsi_cmnd *scmd;
+#endif
 	/*
 	 * Special case for REPORT_LUNs handling where pscsi_plugin_task has
 	 * not been allocated because TCM is handling the emulation directly.
@@ -614,6 +643,17 @@ static void pscsi_transport_complete(struct se_cmd *cmd, struct scatterlist *sg,
 
 	cdb = &pt->pscsi_cdb[0];
 	result = pt->pscsi_result;
+
+#ifdef CONFIG_SOLIDFIRE_LIO
+        if (pt->req && pt->req->special) {
+                scmd = pt->req->special;
+                if (scmd->sdb.resid > 0) {
+                        cmd->residual_count = scmd->sdb.resid;
+                        cmd->se_cmd_flags |= SCF_UNDERFLOW_BIT;
+                }
+        }
+#endif
+
 	/*
 	 * Hack to make sure that Write-Protect modepage is set if R/O mode is
 	 * forced.
@@ -959,6 +999,38 @@ pscsi_parse_cdb(struct se_cmd *cmd)
 	return passthrough_parse_cdb(cmd, pscsi_execute_cmd);
 }
 
+#ifdef CONFIG_SOLIDFIRE_LIO
+/*
+ * If the request queue is blocked, return a check condition so the initiator
+ * can retry on another path.  This comes up typically when the iSCSI session
+ * is in revovery state.
+ * Need to check here because if queue is full and somehow becomes blocked
+ * calls into blk layer may get into a long postponement.
+ * Same problem can happen with scsi_device.  It can cat into
+ * SDEV_BLOCK state via calls to scsi_internal_device_block(). This came up
+ * with recovering iSCSI session, where new requests get requeued in the
+ * request_queue and remain stuck there for long enough to trigger hung
+ * task crash on task abort request.
+ * Returns 1 if new request would block, 0 if ok.
+ */
+static inline int
+pscsi_check_dev(struct scsi_device *sd)
+{
+        spin_lock_irq(sd->request_queue->queue_lock);
+        if (unlikely(blk_queue_stopped(sd->request_queue))) {
+                spin_unlock_irq(sd->request_queue->queue_lock);
+                return 1;
+        }
+        spin_unlock_irq(sd->request_queue->queue_lock);
+        if (unlikely(scsi_device_blocked(sd)))
+                return 1;
+        return scsi_device_is_full(sd);
+}
+static int pscsi_timeout_disk = PS_TIMEOUT_DISK;
+module_param_named(pscsi_timeout_disk, pscsi_timeout_disk, int,
+                                   S_IRUGO | S_IWUSR);
+#endif
+
 static sense_reason_t
 pscsi_execute_cmd(struct se_cmd *cmd)
 {
@@ -968,6 +1040,9 @@ pscsi_execute_cmd(struct se_cmd *cmd)
 	struct pscsi_plugin_task *pt;
 	struct request *req;
 	sense_reason_t ret;
+#ifdef CONFIG_SOLIDFIRE_LIO
+        enum dma_data_direction data_direction = cmd->data_direction;
+#endif
 
 	/*
 	 * Dynamically alloc cdb space, since it may be larger than
@@ -981,6 +1056,14 @@ pscsi_execute_cmd(struct se_cmd *cmd)
 
 	memcpy(pt->pscsi_cdb, cmd->t_task_cdb,
 		scsi_command_size(cmd->t_task_cdb));
+
+#ifdef CONFIG_SOLIDFIRE_LIO
+       if (unlikely(pscsi_check_dev(pdv->pdv_sd))) {
+               cmd->scsi_status = SAM_STAT_BUSY;
+               ret = TCM_OUT_OF_RESOURCES;
+               goto fail;
+       }
+#endif
 
 	req = blk_get_request(pdv->pdv_sd->request_queue,
 			cmd->data_direction == DMA_TO_DEVICE ?
@@ -1006,9 +1089,32 @@ pscsi_execute_cmd(struct se_cmd *cmd)
 	scsi_req(req)->cmd = &pt->pscsi_cdb[0];
 	if (pdv->pdv_sd->type == TYPE_DISK)
 		req->timeout = PS_TIMEOUT_DISK;
+#ifdef CONFIG_SOLIDFIRE_LIO
+                req->timeout = pscsi_timeout_disk;
+#else
+                req->timeout = PS_TIMEOUT_DISK;
+#endif
 	else
 		req->timeout = PS_TIMEOUT_OTHER;
 	scsi_req(req)->retries = PS_RETRY;
+
+#ifdef CONFIG_SOLIDFIRE_LIO
+        /*
+         * Check for blocked queue here too becuase it queue might have become
+         * blocked while lock was dropped.  This does leave a small window
+         * from the check here to when vlk_execute_rq_nowait grabs the lock
+         * and checks it again when it tries to run it after doing
+         * __elv_add_request().
+         * Alternative would be to change block layer code to check at last
+         * possible instant, but that requires adding mechanism to indicate
+         * when not to add to the queue.
+         */
+        if (unlikely(pscsi_check_dev(pdv->pdv_sd))) {
+                cmd->scsi_status = SAM_STAT_BUSY;
+                ret = TCM_OUT_OF_RESOURCES;
+                goto fail_put_request;
+        }
+#endif
 
 	blk_execute_rq_nowait(pdv->pdv_sd->request_queue, NULL, req,
 			(cmd->sam_task_attr == TCM_HEAD_TAG),
@@ -1037,18 +1143,37 @@ static u32 pscsi_get_device_type(struct se_device *dev)
 
 static sector_t pscsi_get_blocks(struct se_device *dev)
 {
+#ifdef CONFIG_SOLIDFIRE_LIO
+        printk(KERN_ERR "Unexpectedly called pscsi_get_blocks.\n");
+#else
 	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
 
 	if (pdv->pdv_bd && pdv->pdv_bd->bd_part)
 		return pdv->pdv_bd->bd_part->nr_sects;
-
+#endif
 	return 0;
 }
+
+#ifdef SOLIDFIRE_LUN
+static void pscsi_delay_status_timer_fn(unsigned long arg)
+{
+        struct se_cmd *cmd = (struct se_cmd *)arg;
+        struct pscsi_plugin_task *pt = cmd->priv;
+
+        pr_debug("PSCSI Deliver Status Delay status 0x%x 0x%x",
+                        pt->pscsi_result, cmd->scsi_status);
+        target_complete_cmd(cmd, SAM_STAT_CHECK_CONDITION);
+        kfree(pt);
+}
+#endif
 
 static void pscsi_req_done(struct request *req, int uptodate)
 {
 	struct se_cmd *cmd = req->end_io_data;
 	struct pscsi_plugin_task *pt = cmd->priv;
+#ifdef SOLIDFIRE_LUN
+        unsigned long flags;
+#endif
 
 	pt->pscsi_result = scsi_req(req)->result;
 	pt->pscsi_resid = scsi_req(req)->resid_len;
@@ -1064,6 +1189,65 @@ static void pscsi_req_done(struct request *req, int uptodate)
 	case DID_OK:
 		target_complete_cmd(cmd, cmd->scsi_status);
 		break;
+#ifdef SOLIDFIRE_LUN
+        case DID_RESET:
+                if (pscsi_reset_sense_key != 0) {
+                        memset(pt->pscsi_sense, 0, sizeof(pt->pscsi_sense));
+                        pt->pscsi_sense[0] = 0x70;
+                        pt->pscsi_sense[SPC_ADD_SENSE_LEN_OFFSET] = 10;
+                        pt->pscsi_sense[SPC_SENSE_KEY_OFFSET]     = pscsi_reset_sense_key & 0x0f;
+                        pt->pscsi_sense[SPC_ASC_KEY_OFFSET]       = pscsi_reset_asc;
+                        pt->pscsi_sense[SPC_ASCQ_KEY_OFFSET]      = pscsi_reset_ascq;
+                        pt->pscsi_result =
+                                (DID_OK << 16) | (CHECK_CONDITION << 1);
+                }
+                target_complete_cmd(cmd, SAM_STAT_CHECK_CONDITION);
+                break;
+        case DID_ERROR:
+                /*
+                 * DID_ERROR comes from iSCSI for outstanding tasks in the
+                 * session after a LUN reset completes.
+                 */
+                spin_lock_irqsave(&cmd->t_state_lock, flags);
+                cmd->transport_state |= CMD_T_ABORTED;
+                spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+                target_complete_cmd(cmd, SAM_STAT_CHECK_CONDITION);
+                break;
+        case DID_SOFT_ERROR:
+                target_complete_cmd(cmd, SAM_STAT_BUSY);
+                break;
+        case DID_TRANSPORT_DISRUPTED:
+                /* skip delay if already aborted */
+                spin_lock_irqsave(&cmd->t_state_lock, flags);
+                if (cmd->transport_state & CMD_T_ABORTED) {
+                        spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+                        target_complete_cmd(cmd, cmd->scsi_status);
+                        break;
+                }
+                spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+                pr_debug("PSCSI Status Delay status");
+                init_timer(&cmd->delay_status_timer);
+                cmd->delay_status_timer.data = (unsigned long)cmd;
+                cmd->delay_status_timer.function = pscsi_delay_status_timer_fn;
+                cmd->delay_status_timer.expires =
+                        jiffies + CMD_DELAY_STATUS_TIME;
+                add_timer(&cmd->delay_status_timer);
+                /*
+                 * ok to put req->q here because info was saved in pt
+                 * need to keep pt for delayed call of target_complete_cmd()
+                 * because it is used in pscsi_transport_complete()
+                 * req about to be bogus, time to forget we know it
+                 */
+                spin_lock_irqsave(&cmd->t_state_lock, flags);
+                pt->req = NULL;
+                spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+                __blk_put_request(req->q, req);
+                return;
+        case DID_PASSTHROUGH:
+                cmd->scsi_status = SAM_STAT_TASK_SET_FULL;
+                target_complete_cmd(cmd, cmd->scsi_status);
+                break;
+#endif
 	default:
 		pr_debug("PSCSI Host Byte exception at cmd: %p CDB:"
 			" 0x%02x Result: 0x%08x\n", cmd, pt->pscsi_cdb[0],
@@ -1073,9 +1257,84 @@ static void pscsi_req_done(struct request *req, int uptodate)
 	}
 
 	memcpy(pt->pscsi_sense, scsi_req(req)->sense, TRANSPORT_SENSE_BUFFER);
+#ifdef SOLIDFIRE_LUN
+        /*
+         * req about to be bogus, time to forget we know it
+         */
+        spin_lock_irqsave(&cmd->t_state_lock, flags);
+        pt->req = NULL;
+        spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+#endif
 	__blk_put_request(req->q, req);
 	kfree(pt);
 }
+
+#ifdef SOLIDFIRE_LUN
+static void pscsi_abort_task(struct se_device *dev, struct se_cmd *cmd)
+{
+        struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
+        struct pscsi_plugin_task *pt;
+        struct request *req;
+        struct scsi_cmnd *scmd;
+        struct scsi_cmnd scmd_internal;
+        struct scsi_device *sdev;
+        unsigned long flags;
+
+        spin_lock_irqsave(&cmd->t_state_lock, flags);
+        if (!(cmd->transport_state & CMD_T_BUSY))
+                goto done;
+        pt = cmd->priv;
+        /* this can happen if cmd is in data phase */
+        if (pt == NULL)
+                goto done;
+        /* this can happen if cmd already complete */
+        req = pt->req;
+        if (req == NULL)
+                goto done;
+        scmd = req->special;
+        /* this can happen if not in SCSI layer yet */
+        if (scmd == NULL)
+                goto done;
+        sdev = pdv->pdv_sd;
+        /* this shouldn't happen, but just in case */
+        if (sdev == NULL)
+                goto done;
+        /*
+         * only need copy of scmd becasue the abort handler only uses device
+         * need to get a handle on device so it can't be yanked out from
+         * underneath.  Make copy and get device hold with t_state lock held
+         * that keeps pscsi from dropping ref on buffer which is holding the
+         * scmnd.  Can't try for request_queue lock because of lock ordering.
+         * Had to get t_state lock to find the req, but pscsi_req_done is
+         * called with request_queue lock held and it grabs t_state_lock.
+         * XXX if this needs to become a fully functional task abort then
+         * this whole area needs to be addressed.
+         * Note that t_state_lock has to be dropped before calling abort
+         * handler because it grabs a mutex.
+         */
+        scmd_internal = *scmd;
+        get_device(&sdev->sdev_gendev);
+        spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+        /* Pass the abort through if there is a hanldler */
+        if (sdev->host->hostt->eh_abort_handler) {
+                /*
+                 * Currently in SCSI only first bit in eh_eflags is used.
+                 * Set special value in flags so that handler can distinguish
+                 * this as a pass through.  Current idea with this is to not
+                 * pass it through to the target device, instead just
+                 * terminate the underlying connection.  This is to protect
+                 * against initiators that don't wait for status on aborts.
+                 */
+                scmd_internal.eh_eflags = 0x10000;
+                sdev->host->hostt->eh_abort_handler(&scmd_internal);
+        }
+        put_device(&sdev->sdev_gendev);
+        return;
+
+done:
+        spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+}
+#endif
 
 static const struct target_backend_ops pscsi_ops = {
 	.name			= "pscsi",
@@ -1096,6 +1355,9 @@ static const struct target_backend_ops pscsi_ops = {
 	.get_device_type	= pscsi_get_device_type,
 	.get_blocks		= pscsi_get_blocks,
 	.tb_dev_attrib_attrs	= passthrough_attrib_attrs,
+#ifdef SOLIDFIRE_LUN
+        .abort_task             = pscsi_abort_task,
+#endif
 };
 
 static int __init pscsi_module_init(void)

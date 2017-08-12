@@ -194,6 +194,9 @@ static struct config_group *target_core_register_fabric(
 	pr_debug("Target_Core_ConfigFS: REGISTER -> group: %p name:"
 			" %s\n", group, name);
 
+	pr_err("Target_Core_ConfigFS: REGISTER -> group: %p name:"
+			" %s\n", group, name);
+
 	tf = target_core_get_fabric(name);
 	if (!tf) {
 		pr_debug("target_core_register_fabric() trying autoload for %s\n",
@@ -2365,6 +2368,10 @@ static struct config_group *target_core_alua_create_lu_gp(
 	struct t10_alua_lu_gp *lu_gp;
 	struct config_group *alua_lu_gp_cg = NULL;
 	struct config_item *alua_lu_gp_ci = NULL;
+	
+	pr_err("Target_Core_ConfigFS: Allocated ALUA Logical Unit"
+		" Group: core/alua/lu_gps/%s\n",
+		config_item_name(alua_lu_gp_ci));
 
 	lu_gp = core_alua_allocate_lu_gp(name, 0);
 	if (IS_ERR(lu_gp))
@@ -2870,6 +2877,8 @@ static struct config_group *target_core_stat_mkdir(
 	struct config_group *group,
 	const char *name)
 {
+	pr_err("target_core_stat_mkdir called with name=%s \n",name);
+	
 	return ERR_PTR(-ENOSYS);
 }
 
@@ -2901,6 +2910,8 @@ static struct config_group *target_core_make_subdev(
 	struct target_backend *tb = hba->backend;
 	struct se_device *dev;
 	int errno = -ENOMEM, ret;
+
+	pr_err("target_core_make_subdev called with name=%s \n",name);
 
 	ret = mutex_lock_interruptible(&hba->hba_access_mutex);
 	if (ret)
@@ -3088,11 +3099,19 @@ static struct config_group *target_core_call_addhbatotarget(
 	struct config_group *group,
 	const char *name)
 {
+#ifdef CONFIG_SOLIDFIRE_LIO
+        char *se_plugin_str, *str;
+#else
 	char *se_plugin_str, *str, *str2;
+	int ret;
+#endif
 	struct se_hba *hba;
 	char buf[TARGET_CORE_NAME_MAX_LEN];
+#ifndef CONFIG_SOLIDFIRE_LIO
 	unsigned long plugin_dep_id = 0;
-	int ret;
+#endif
+
+	pr_err("target_core_call_addhbatotarget called with name=%s \n",name);
 
 	memset(buf, 0, TARGET_CORE_NAME_MAX_LEN);
 	if (strlen(name) >= TARGET_CORE_NAME_MAX_LEN) {
@@ -3109,6 +3128,10 @@ static struct config_group *target_core_call_addhbatotarget(
 		return ERR_PTR(-EINVAL);
 	}
 	se_plugin_str = buf;
+
+#ifdef CONFIG_SOLIDFIRE_LIO
+        *str = '\0'; /* Terminate for *se_plugin_str */
+#else
 	/*
 	 * Special case for subsystem plugins that have "_" in their names.
 	 * Namely rd_direct and rd_mcp..
@@ -3129,12 +3152,18 @@ static struct config_group *target_core_call_addhbatotarget(
 				" plugin_dep_id\n", ret);
 		return ERR_PTR(ret);
 	}
+#endif
+
 	/*
 	 * Load up TCM subsystem plugins if they have not already been loaded.
 	 */
 	transport_subsystem_check_init();
 
+#ifdef CONFIG_SOLIDFIRE_LIO
+        hba = core_alloc_hba(se_plugin_str, 0, 0);
+#else
 	hba = core_alloc_hba(se_plugin_str, plugin_dep_id, 0);
+#endif
 	if (IS_ERR(hba))
 		return ERR_CAST(hba);
 

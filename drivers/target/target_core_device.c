@@ -65,6 +65,19 @@ transport_lookup_cmd_lun(struct se_cmd *se_cmd, u64 unpacked_lun)
 	struct se_dev_entry *deve;
 	sense_reason_t ret = TCM_NO_SENSE;
 
+#ifdef SOLIDFIRE_LUN
+        /* Checking for lun boundaries */
+        /* LUNS 0-255 PERIPHERAL LUNS */
+        /* LUNS 256-16383 FLAT LUN ADDRESSING SCHEME */
+        if((unpacked_lun > 0xFF) && (unpacked_lun < 0x4100))
+                return TCM_NON_EXISTENT_LUN;
+
+        /* mask the flat lun bit to index the luns by actual lun number */
+        /* performing this operation will avoid any gaps of unsed lun structures */
+        /* saves the memory foot print */
+        unpacked_lun = unpacked_lun & 0x3FFF;
+#endif /* #ifdef SOLIDFIRE_LUN */
+
 	rcu_read_lock();
 	deve = target_nacl_find_deve(nacl, unpacked_lun);
 	if (deve) {
@@ -110,7 +123,14 @@ out_unlock:
 		 * REPORT_LUNS, et al to be returned when no active
 		 * MappedLUN=0 exists for this Initiator Port.
 		 */
+#ifdef SOLIDFIRE_LUN
+                /* reject any I/Os other than INQUIRY or REPORT_LUNS for control LUN 0 */ 
+                if (( unpacked_lun != 0) || 
+                    ((se_cmd->__t_task_cdb[0] != INQUIRY) && 
+                     (se_cmd->__t_task_cdb[0] != REPORT_LUNS))) {
+#else
 		if (unpacked_lun != 0) {
+#endif /* #ifdef SOLIDFIRE_LUN */
 			pr_err("TARGET_CORE[%s]: Detected NON_EXISTENT_LUN"
 				" Access for 0x%08llx\n",
 				se_cmd->se_tfo->get_fabric_name(),
@@ -164,6 +184,19 @@ int transport_lookup_tmr_lun(struct se_cmd *se_cmd, u64 unpacked_lun)
 	struct se_node_acl *nacl = se_sess->se_node_acl;
 	struct se_tmr_req *se_tmr = se_cmd->se_tmr_req;
 	unsigned long flags;
+
+#ifdef SOLIDFIRE_LUN
+        /* Checking for lun boundaries */
+        /* LUNS 0-255 PERIPHERAL LUNS */
+        /* LUNS 256-16383 FLAT LUN ADDRESSING SCHEME */
+        if((unpacked_lun > 0xFF) && (unpacked_lun < 0x4100))
+                return -ENODEV;
+
+        /* mask the flat lun bit to index the luns by actual lun number */
+        /* performing this operation will avoid any gaps of unsed lun structures */
+        /* saves the memory foot print */
+        unpacked_lun = unpacked_lun & 0x3FFF;
+#endif /* #ifdef SOLIDFIRE_LUN */
 
 	rcu_read_lock();
 	deve = target_nacl_find_deve(nacl, unpacked_lun);
