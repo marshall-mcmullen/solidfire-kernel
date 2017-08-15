@@ -1040,9 +1040,6 @@ pscsi_execute_cmd(struct se_cmd *cmd)
 	struct pscsi_plugin_task *pt;
 	struct request *req;
 	sense_reason_t ret;
-#ifdef CONFIG_SOLIDFIRE_LIO
-        enum dma_data_direction data_direction = cmd->data_direction;
-#endif
 
 	/*
 	 * Dynamically alloc cdb space, since it may be larger than
@@ -1088,7 +1085,6 @@ pscsi_execute_cmd(struct se_cmd *cmd)
 	scsi_req(req)->cmd_len = scsi_command_size(pt->pscsi_cdb);
 	scsi_req(req)->cmd = &pt->pscsi_cdb[0];
 	if (pdv->pdv_sd->type == TYPE_DISK)
-		req->timeout = PS_TIMEOUT_DISK;
 #ifdef CONFIG_SOLIDFIRE_LIO
                 req->timeout = pscsi_timeout_disk;
 #else
@@ -1281,8 +1277,6 @@ static void pscsi_abort_task(struct se_device *dev, struct se_cmd *cmd)
         unsigned long flags;
 
         spin_lock_irqsave(&cmd->t_state_lock, flags);
-        if (!(cmd->transport_state & CMD_T_BUSY))
-                goto done;
         pt = cmd->priv;
         /* this can happen if cmd is in data phase */
         if (pt == NULL)
