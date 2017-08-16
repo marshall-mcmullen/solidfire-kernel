@@ -64,9 +64,11 @@ Getting all those pieces working right takes some careful work:
     do not need it.
 
 2.  In the solidfire-portage repo, add a new ebuild to
-    sys-kernel/solidfire-sources with the EGIT_COMMIT pointing at
-    the commit you want to build.  Update the manifest.  Push to the
-    "ember" branch.
+    sys-kernel/solidfire-sources with the EGIT_COMMIT pointing at the
+    commit you want to build.  If EGIT_COMMIT is a commit SHA then
+    EGIT_BRANCH needs to name the branch the commit is on, but if
+    EGIT_COMMIT is a tag then EGIT_BRANCH does not need to be set.
+    Update the manifest.  Push to the "ember" branch.
 
 3.  Tell Jenkins to make a new solidfire-portage snapshot:
     http://pw-jenkins.pw.solidfire.net:8080/job/ember-snapshots/
