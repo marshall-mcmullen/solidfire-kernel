@@ -1637,9 +1637,6 @@ static struct iscsi_cls_session *iscsi_session_lookup(uint32_t sid)
 {
 	unsigned long flags;
 	struct iscsi_cls_session *sess;
-#ifdef CONFIG_SOLIDFIRE_ISCSI
-        //struct hlist_node *node;
-#endif
 
 	spin_lock_irqsave(&sesslock, flags);
 #ifdef CONFIG_SOLIDFIRE_ISCSI
@@ -1663,9 +1660,6 @@ static struct iscsi_cls_conn *iscsi_conn_lookup(uint32_t sid, uint32_t cid)
 {
 	unsigned long flags;
 	struct iscsi_cls_conn *conn;
-#ifdef CONFIG_SOLIDFIRE_ISCSI
-        //struct hlist_node *node;
-#endif
 
 	spin_lock_irqsave(&connlock, flags);
 #ifdef CONFIG_SOLIDFIRE_ISCSI
