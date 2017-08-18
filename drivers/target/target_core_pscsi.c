@@ -1257,6 +1257,14 @@ static void pscsi_req_done(struct request *req, int uptodate)
         /*
          * req about to be bogus, time to forget we know it
          */
+        /*
+         * This is to prevent race with things like pscsi_trasnport_complete() - that always 
+         * get called with t_state_lock held and first check for pt->req and dereference it 
+         * if it's not NULL, holding the lock for the duration of the access. Taking the 
+         * lock here make it wait if something else is holding it. The req that pt->req points 
+         * to is valid until the __blk_put_request() - so making it NULL with the lock held 
+         * ensures nothing can find it once it's about to be freed.
+         */
         spin_lock_irqsave(&cmd->t_state_lock, flags);
         pt->req = NULL;
         spin_unlock_irqrestore(&cmd->t_state_lock, flags);
