@@ -3617,12 +3617,12 @@ int iscsi_set_param(struct iscsi_cls_conn *cls_conn,
 	case ISCSI_PARAM_IFACE_NAME:
 		return iscsi_switch_str_param(&session->ifacename, buf);
 	case ISCSI_PARAM_INITIATOR_NAME:
-		return iscsi_switch_str_param(&session->initiatorname, buf);
 #ifdef CONFIG_SOLIDFIRE_ISCSI
                 ret = iscsi_switch_str_param(&session->initiatorname, buf);
                 if (ret == 0) {
                         session->sessfail_fast = iscsi_fail_immediate(session);
                 }
+		return ret;
 #else
 		return iscsi_switch_str_param(&session->initiatorname, buf);
 #endif

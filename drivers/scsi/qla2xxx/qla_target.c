@@ -187,22 +187,6 @@ void qlt_do_generation_tick(struct scsi_qla_host *vha, int *dest)
 	wmb();
 }
 
-#if 0
-static fc_port_t *qlt_find_fcport_by_wwpn(struct scsi_qla_host *vha,
-        uint8_t* port_name)
-{
-        fc_port_t *fcport, *retp = NULL;
-
-        list_for_each_entry(fcport, &vha->vp_fcports, list) {
-                if (memcmp(fcport->port_name, port_name, WWN_SIZE))
-                        continue;
-                retp = fcport;
-        }
-
-        return retp;
-}
-#endif
-
 /* Might release hw lock, then reaquire!! */
 static inline int qlt_issue_marker(struct scsi_qla_host *vha, int vha_locked)
 {

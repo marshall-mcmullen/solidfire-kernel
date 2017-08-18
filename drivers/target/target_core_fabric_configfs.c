@@ -382,8 +382,6 @@ static struct config_group *target_fabric_make_mappedlun(
 	target_stat_setup_mappedlun_default_groups(lacl);
 
 #ifdef CONFIG_SOLIDFIRE_LIO
-        //spin_lock_irq(&se_nacl->device_list_lock);
-
         // Generate a UA for REPORTED LUNS DATA CHANGE for every other LUN the
         // initiator has access to.
         for (i = 0; i < TRANSPORT_MAX_LUNS_PER_TPG; ++i)
@@ -391,20 +389,15 @@ static struct config_group *target_fabric_make_mappedlun(
                 if (!se_nacl->lun_allocation_map[i]) {
                         continue;
                 }
-                //spin_unlock_irq(&se_nacl->device_list_lock);
                 target_ua_allocate_lun(se_nacl, i, 0x3f, 0xe);
-                //spin_lock_irq(&se_nacl->device_list_lock);
         }
 
         if (se_nacl->lun_allocation_map[mapped_lun]) {
                 pr_err("Mapped LUN: %lu already allocated.\n", mapped_lun);
-                //spin_unlock_irq(&se_nacl->device_list_lock);
                 ret = -EINVAL;
                 goto out;
         }
         se_nacl->lun_allocation_map[mapped_lun] = 1;
-
-        //spin_unlock_irq(&se_nacl->device_list_lock);
 #endif
 
 	kfree(buf);
@@ -430,8 +423,6 @@ static void target_fabric_drop_mappedlun(
 	configfs_remove_default_groups(&lacl->se_lun_group);
 
 #ifdef CONFIG_SOLIDFIRE_LIO
-        //spin_lock_irq(&nacl->device_list_lock);
-
         // Mark this LUN as free in the lun allocation map.
         if (!nacl->lun_allocation_map[lacl->mapped_lun]) {
                 pr_err("Mapped LUN: %llu already deallocated.\n",
@@ -446,11 +437,8 @@ static void target_fabric_drop_mappedlun(
                 if (!nacl->lun_allocation_map[i]) {
                         continue;
                 }
-                //spin_unlock_irq(&nacl->device_list_lock);
                 target_ua_allocate_lun(nacl, i, 0x3f, 0xe);
-                //spin_lock_irq(&nacl->device_list_lock);
         }
-        //spin_unlock_irq(&nacl->device_list_lock);
 #endif
 	config_item_put(item);
 }
