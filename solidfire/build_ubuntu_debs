@@ -1,13 +1,28 @@
-#!/bin/bash -x
+#!/bin/bash
 
 if ! lsb_release -i | grep -q Ubuntu; then
     echo "This is not an Ubuntu build Env!"
     exit 1
 fi
 
-cp solidfire/kernel.config .config
-
 export CC=/usr/bin/gcc-4.8.1-p1
 export CXX=/usr/bin/g++-4.8.1-p1
+
+#verify CC links
+if [[ $(readlink -f /usr/bin/cc) != ${CC} || \
+      $(readlink -f /usr/bin/gcc) != ${CC} || \
+      $(readlink -f /usr/bin/g++) != ${CXX} ]]; then
+    echo "gcc/g++ symlinks are not correct:"
+    ls -l /usr/bin/cc /usr/bin/gcc /usr/bin/g++
+    echo
+    echo "Please run:"
+    echo "rm /usr/bin/cc /usr/bin/gcc /usr/bin/g++; ln -s ${CC} /usr/bin/cc; ln -s ${CC} /usr/bin/gcc; ln -s ${CXX} /usr/bin/g++"
+    exit 1
+fi
+
+set -e
+set -x
+
+cp solidfire/kernel.config .config
 
 make -j $(($(nproc --all) + 1)) deb-pkg LOCALVERSION=-$(git rev-parse --abbrev-ref HEAD)-$(git describe --tags --abbrev=6 --dirty) KDEB_PKGVERSION=$(make kernelversion)
