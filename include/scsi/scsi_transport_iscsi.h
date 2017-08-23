@@ -202,7 +202,11 @@ extern void iscsi_ping_comp_event(uint32_t host_no,
 				  uint32_t data_size, uint8_t *data);
 
 struct iscsi_cls_conn {
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        struct hlist_node conn_hlist;   /* item in connhash */
+#else
 	struct list_head conn_list;	/* item in connlist */
+#endif
 	void *dd_data;			/* LLD private data */
 	struct iscsi_transport *transport;
 	uint32_t cid;			/* connection id */
@@ -231,7 +235,12 @@ enum {
 #define ISCSI_MAX_TARGET -1
 
 struct iscsi_cls_session {
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        struct hlist_node sess_hlist;           /* item in sesshash */
+        uint8_t sessfail_fast;                  /* inherit from iscsi_session */
+#else
 	struct list_head sess_list;		/* item in session_list */
+#endif
 	struct iscsi_transport *transport;
 	spinlock_t lock;
 	struct work_struct block_work;

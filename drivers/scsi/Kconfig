@@ -1,5 +1,15 @@
 menu "SCSI device support"
 
+config SOLIDFIRE_ISCSI
+        bool "SolidFire Fibre Channel Node iSCSI Initiator Support"
+        default y
+        ---help---
+          Changes to support large iSCSI session counts for SolidFire Fibre
+          Channel nodes.
+
+          Bumps the maximum number of sg and sd devices.
+          Inhibits scanning for partitions if the IQN is for a Fibre Channel node.
+
 config SCSI_MOD
        tristate
        default y if SCSI=n || SCSI=y

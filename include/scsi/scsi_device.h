@@ -466,6 +466,12 @@ static inline int scsi_device_blocked(struct scsi_device *sdev)
 	return sdev->sdev_state == SDEV_BLOCK ||
 		sdev->sdev_state == SDEV_CREATED_BLOCK;
 }
+#ifdef CONFIG_SOLIDFIRE_LIO
+static inline int scsi_device_is_full(struct scsi_device *sdev)
+{
+        return (atomic_read(&sdev->device_busy) >= sdev->queue_depth);
+}
+#endif
 static inline int scsi_device_created(struct scsi_device *sdev)
 {
 	return sdev->sdev_state == SDEV_CREATED ||

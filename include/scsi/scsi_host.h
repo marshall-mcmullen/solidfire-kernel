@@ -336,6 +336,21 @@ struct scsi_host_template {
 	 */
 
 	int (*host_reset)(struct Scsi_Host *shost, int reset_type);
+
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        /*
+         * Solidfire-specific function to check if partitions should be scanned
+         * on a particular SCSI device.  This is only implemented by the iSCSI
+         * Software TCP driver.  This allows us to avoid scanning for partitions
+         * on iSCSI sessions initiated by an FC node.
+         *
+         * @param shost The SCSI device being queried.
+         *
+         * @returns 1 if partitions should be scanned, 0 if partitions should not
+         *          be scanned.
+         */
+        int (*should_scan_for_partitions)(struct scsi_device *sdev);
+#endif
 #define SCSI_ADAPTER_RESET	1
 #define SCSI_FIRMWARE_RESET	2
 

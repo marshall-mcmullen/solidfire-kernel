@@ -677,6 +677,19 @@ static void target_complete_failure_work(struct work_struct *work)
 {
 	struct se_cmd *cmd = container_of(work, struct se_cmd, work);
 
+#ifdef SOLIDFIRE_LUN
+        if (unlikely(cmd->scsi_status == SAM_STAT_TASK_SET_FULL)) {
+                transport_generic_request_failure(cmd,
+                                TCM_OUT_OF_RESOURCES);
+                return;
+        }
+        if (unlikely(cmd->scsi_status == SAM_STAT_RESERVATION_CONFLICT)) {
+                transport_generic_request_failure(cmd,
+                                TCM_RESERVATION_CONFLICT);
+                return;
+        }
+#endif
+
 	transport_generic_request_failure(cmd,
 			TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE);
 }
@@ -1278,6 +1291,16 @@ target_setup_cmd_from_cdb(struct se_cmd *cmd, unsigned char *cdb)
 {
 	struct se_device *dev = cmd->se_dev;
 	sense_reason_t ret;
+#ifdef SOLIDFIRE_LUN
+        unsigned long flags;
+
+        spin_lock_irqsave(&dev->se_tmr_lock, flags);
+        if (dev->dev_tmr_flags & DF_TMR_LUN_RESET_ACTIVE) {
+                spin_unlock_irqrestore(&dev->se_tmr_lock, flags);
+                return TCM_RESET_IN_PROG;
+        }
+        spin_unlock_irqrestore(&dev->se_tmr_lock, flags);
+#endif
 
 	/*
 	 * Ensure that the received CDB is less than the max (252 + 8) bytes
@@ -1340,6 +1363,9 @@ int transport_handle_cdb_direct(
 	struct se_cmd *cmd)
 {
 	sense_reason_t ret;
+#ifdef SOLIDFIRE_LUN
+        unsigned long flags;
+#endif
 
 	if (!cmd->se_lun) {
 		dump_stack();
@@ -1352,6 +1378,28 @@ int transport_handle_cdb_direct(
 				" from interrupt context\n");
 		return -EINVAL;
 	}
+#ifdef SOLIDFIRE_LUN
+        /*
+         * Possible race with task abort - if abort arrives bofore cmd->t_state
+         * is set, core_tmr_abort_task() can free the cmd and then when
+         * transport_generic_new_cmd is called it adds the freed command to
+         * se_device->state_list, the list is corrupted and unpredictable
+         * results can occur.  Code was added to core_tmr_abort_task() to wait
+         * when cmd->t_state == TRANSPORT_NO_STATE - so the completion wakes
+         * it up.  Once t_state and transport_state are set below, the normal
+         * abort code works correctly.
+         */
+        spin_lock_irqsave(&cmd->t_state_lock, flags);
+        if ((cmd->transport_state & CMD_T_ABORTED) &&
+                        (cmd->transport_state & CMD_T_STOP)) {
+                spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+                complete(&cmd->t_transport_stop_comp);
+                return 0;
+        }
+        cmd->t_state = TRANSPORT_NEW_CMD;
+        cmd->transport_state |= CMD_T_ACTIVE;
+        spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+#else
 	/*
 	 * Set TRANSPORT_NEW_CMD state and CMD_T_ACTIVE to ensure that
 	 * outstanding descriptors are handled correctly during shutdown via
@@ -1362,6 +1410,7 @@ int transport_handle_cdb_direct(
 	 */
 	cmd->t_state = TRANSPORT_NEW_CMD;
 	cmd->transport_state |= CMD_T_ACTIVE;
+#endif
 
 	/*
 	 * transport_generic_new_cmd() is already handling QUEUE_FULL,
@@ -1461,6 +1510,13 @@ int target_submit_cmd_map_sgls(struct se_cmd *se_cmd, struct se_session *se_sess
 
 	if (flags & TARGET_SCF_UNKNOWN_SIZE)
 		se_cmd->unknown_data_length = 1;
+#ifdef SOLIDFIRE_LUN
+        /*
+         * For target_trace that might come up before
+         * target_setup_cmd_from_cdb() - or if it doesn't work.
+         */
+        se_cmd->t_task_cdb = &se_cmd->__t_task_cdb[0];
+#endif
 	/*
 	 * Obtain struct se_cmd->cmd_kref reference and add new cmd to
 	 * se_sess->sess_cmd_list.  A second kref_get here is necessary
@@ -1478,9 +1534,47 @@ int target_submit_cmd_map_sgls(struct se_cmd *se_cmd, struct se_session *se_sess
 	/*
 	 * Locate se_lun pointer and attach it to struct se_cmd
 	 */
+
+#ifdef SOLIDFIRE_LUN
+        /* Copy the first byte of the cdb for rejecting I/Os for control LUN=0 */
+        /* other than INQUIRY and REPORT LUNS in transport_lookup_cmd_lun */
+        se_cmd->__t_task_cdb[0] = cdb[0];
+#endif /* #ifdef SOLIDFIRE_LUN */
+
 	rc = transport_lookup_cmd_lun(se_cmd, unpacked_lun);
 	if (rc) {
+#ifdef SOLIDFIRE_LUN
+                int rc1;
+
+                /*
+                 * If transport_send_check_condition_and_sense() fails the
+                 * usual strategy is to set state = TRANSPORT_COMPLETE_QF_OK
+                 * and call transport_handle_queue_full().  But the session
+                 * might not be in a state where the reties can work and that
+                 * would eventually lead to a hung task crash, probably at
+                 * session delete time.  Returning non-zero propagates back
+                 * into driver where the command should get deleted.
+                 */
+                rc1 = transport_send_check_condition_and_sense(se_cmd, rc, 0);
+                if (rc1 < 0) {
+                        unsigned long flags;
+
+                        spin_lock_irqsave(&se_sess->sess_cmd_lock, flags);
+                        list_del(&se_cmd->se_cmd_list);
+                        spin_unlock(&se_sess->sess_cmd_lock);
+                        return rc1;
+                }
+                /*
+                 * positive value return indicates task abort has control
+                 * of this cmd
+                 */
+                if (rc1 > 0) {
+                        complete(&se_cmd->t_transport_stop_comp);
+                        return 0;
+                }
+#else
 		transport_send_check_condition_and_sense(se_cmd, rc, 0);
+#endif
 		target_put_sess_cmd(se_cmd);
 		return 0;
 	}
@@ -1500,6 +1594,16 @@ int target_submit_cmd_map_sgls(struct se_cmd *se_cmd, struct se_session *se_sess
 		se_cmd->t_prot_nents = sgl_prot_count;
 		se_cmd->se_cmd_flags |= SCF_PASSTHROUGH_PROT_SG_TO_MEM_NOALLOC;
 	}
+
+#ifdef CONFIG_SOLIDFIRE_LIO
+        // Reject any IOs with data transfer lengths larger than 2MiB.  This is in
+        // generic target core code, so it affects more than just tcm_qla2xxx, but
+        // this seemed like the best place to put the check.
+        if (data_length > 2 * 1024 * 1024) {
+                transport_generic_request_failure(se_cmd, TCM_INVALID_CDB_FIELD);
+                return 0;
+        }
+#endif /* #ifdef CONFIG_SOLIDFIRE_LIO */
 
 	/*
 	 * When a non zero sgl_count has been passed perform SGL passthrough
@@ -1656,6 +1760,33 @@ int target_submit_tmr(struct se_cmd *se_cmd, struct se_session *se_sess,
 }
 EXPORT_SYMBOL(target_submit_tmr);
 
+#ifdef CONFIG_SOLIDFIRE_LIO
+/*
+ * Check for aborted cmd
+ * This prevents race with core_tmr_abort_task() which can result in
+ * status being delivered twice for same cmd.
+ * Setting SCF_SENT_CHECK_CONDITION prevents race with possible incoming abort
+ */
+static int transport_generic_check_for_abort(struct se_cmd *cmd)
+{
+        unsigned long flags;
+
+        spin_lock_irqsave(&cmd->t_state_lock, flags);
+        if (cmd->se_cmd_flags & SCF_SENT_CHECK_CONDITION) {
+                spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+                return 1;
+        }
+        if ((cmd->transport_state & CMD_T_ABORTED) &&
+                        (cmd->transport_state & CMD_T_STOP)) {
+                spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+                return 1;
+        }
+        cmd->se_cmd_flags |= SCF_SENT_CHECK_CONDITION;
+        spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+        return 0;
+}
+#endif
+
 /*
  * Handle SAM-esque emulation for generic transport request failures.
  */
@@ -1712,6 +1843,20 @@ void transport_generic_request_failure(struct se_cmd *cmd,
 	case TCM_UNSUPPORTED_SEGMENT_DESC_TYPE_CODE:
 		break;
 	case TCM_OUT_OF_RESOURCES:
+#ifdef CONFIG_SOLIDFIRE_LIO
+                if (cmd->scsi_status == SAM_STAT_BUSY) {
+                        trace_target_cmd_complete(cmd);
+                        if (transport_generic_check_for_abort(cmd)) {
+                                pr_debug("Cmd %p TCM_OUT_OF_RESOURCES abt\n",
+                                                cmd);
+                                return;
+                        }
+                        ret = cmd->se_tfo->queue_status(cmd);
+                        if (ret == -EAGAIN || ret == -ENOMEM)
+                                goto queue_full;
+                        goto check_stop;
+                }
+#endif
 		sense_reason = TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
 		break;
 	case TCM_RESERVATION_CONFLICT:
@@ -1721,6 +1866,12 @@ void transport_generic_request_failure(struct se_cmd *cmd,
 		 *
 		 * Uses linux/include/scsi/scsi.h SAM status codes defs
 		 */
+#ifdef CONFIG_SOLIDFIRE_LIO
+                if (transport_generic_check_for_abort(cmd)) {
+                        pr_debug("Cmd %p TCM_RESERVATION_CONFLICT abt\n", cmd);
+                        return;
+                }
+#endif
 		cmd->scsi_status = SAM_STAT_RESERVATION_CONFLICT;
 		/*
 		 * For UA Interlock Code 11b, a RESERVATION CONFLICT will
@@ -1740,6 +1891,25 @@ void transport_generic_request_failure(struct se_cmd *cmd,
 		if (ret)
 			goto queue_full;
 		goto check_stop;
+#ifdef CONFIG_SOLIDFIRE_LIO
+        case TCM_RESET_IN_PROG:
+                /*
+                 * LUN reset being processed - respond with BUSY status
+                 * XXX consider
+                 *      delayed BUSY to prevent initiator hammering away
+                 *      maybe QFULL would be a better response
+                 */
+                if (transport_generic_check_for_abort(cmd)) {
+                        pr_debug("Cmd %p TCM_RESET_IN_PROG abt\n", cmd);
+                        return;
+                }
+                cmd->scsi_status = SAM_STAT_BUSY;
+                trace_target_cmd_complete(cmd);
+                ret = cmd->se_tfo->queue_status(cmd);
+                if (ret == -EAGAIN || ret == -ENOMEM)
+                        goto queue_full;
+                goto check_stop;
+#endif
 	default:
 		pr_err("Unknown transport error for CDB 0x%02x: %d\n",
 			cmd->t_task_cdb[0], sense_reason);
@@ -2107,6 +2277,9 @@ static void target_complete_ok_work(struct work_struct *work)
 {
 	struct se_cmd *cmd = container_of(work, struct se_cmd, work);
 	int ret;
+#ifdef CONFIG_SOLIDFIRE_LIO
+        enum dma_data_direction data_direction;
+#endif
 
 	/*
 	 * Check if we need to move delayed/dormant tasks from cmds on the
@@ -2166,7 +2339,16 @@ static void target_complete_ok_work(struct work_struct *work)
 	}
 
 queue_rsp:
+#ifdef CONFIG_SOLIDFIRE_LIO
+        if (cmd->scsi_status == SAM_STAT_BUSY) {
+                data_direction = DMA_NONE;
+        } else {
+                data_direction = cmd->data_direction;
+        }
+        switch (data_direction) {
+#else
 	switch (cmd->data_direction) {
+#endif
 	case DMA_FROM_DEVICE:
 		if (cmd->scsi_status)
 			goto queue_status;
@@ -2189,6 +2371,12 @@ queue_rsp:
 			return;
 		}
 
+#ifdef CONFIG_SOLIDFIRE_LIO
+                if (cmd->se_cmd_flags & SCF_UNDERFLOW_BIT &&
+                        cmd->data_length >= cmd->residual_count) {
+                        cmd->data_length -= cmd->residual_count;
+                }
+#endif
 		trace_target_cmd_complete(cmd);
 		ret = cmd->se_tfo->queue_data_in(cmd);
 		if (ret)
@@ -2839,6 +3027,24 @@ bool transport_wait_for_tasks(struct se_cmd *cmd)
 	bool ret, aborted = false, tas = false;
 
 	spin_lock_irqsave(&cmd->t_state_lock, flags);
+#ifdef SOLIDFIRE_LUN
+        /*
+         * If abort came in during initialization there is a possible race
+         * with the initialization path.  Waiting on
+         * cmd->t_transport_stop_comp allows the inialization to detect the
+         * abort.  Otherwise it's possible for the inialization to finish
+         * processing after the task is freed.
+         */
+        if (cmd->t_state == TRANSPORT_NO_STATE) {
+                cmd->transport_state |= CMD_T_STOP;
+                spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+                wait_for_completion(&cmd->t_transport_stop_comp);
+                spin_lock_irqsave(&cmd->t_state_lock, flags);
+                cmd->transport_state &= ~(CMD_T_ACTIVE | CMD_T_STOP);
+                spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+                return true;
+        }
+#endif
 	ret = __transport_wait_for_tasks(cmd, false, &aborted, &tas, &flags);
 	spin_unlock_irqrestore(&cmd->t_state_lock, flags);
 
@@ -3029,8 +3235,22 @@ transport_send_check_condition_and_sense(struct se_cmd *cmd,
 	spin_lock_irqsave(&cmd->t_state_lock, flags);
 	if (cmd->se_cmd_flags & SCF_SENT_CHECK_CONDITION) {
 		spin_unlock_irqrestore(&cmd->t_state_lock, flags);
-		return 0;
+#ifdef CONFIG_SOLIDFIRE_LIO
+                return 1;
+#else
+                return 0;
+#endif
 	}
+#ifdef CONFIG_SOLIDFIRE_LIO
+        /*
+         * Check CMD_T_ABORTED to avoid race with core_tmr_abort_task()
+         */
+        if ((cmd->transport_state & CMD_T_ABORTED) &&
+                        (cmd->transport_state & CMD_T_STOP)) {
+                spin_unlock_irqrestore(&cmd->t_state_lock, flags);
+                return 1;
+        }
+#endif
 	cmd->se_cmd_flags |= SCF_SENT_CHECK_CONDITION;
 	spin_unlock_irqrestore(&cmd->t_state_lock, flags);
 

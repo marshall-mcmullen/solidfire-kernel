@@ -21,6 +21,10 @@
 
 #include "qla_target.h"
 
+#ifdef SOLIDFIRE_TEMP_WWN
+extern void solidfire_free_temp_wwn(void);
+#endif /* #ifdef SOLIDFIRE_TEMP_WWN */
+
 /*
  * Driver version
  */
@@ -2528,6 +2532,14 @@ qla2x00_set_isp_flags(struct qla_hw_data *ha)
 		ha->device_type |= DT_T10_PI;
 		ha->fw_srisc_address = RISC_START_ADDRESS_2400;
 		break;
+	case PCI_DEVICE_ID_QLOGIC_ISP2971:
+		ha->isp_type |= DT_ISP2971;
+		ha->device_type |= DT_ZIO_SUPPORTED;
+		ha->device_type |= DT_FWI2;
+		ha->device_type |= DT_IIDMA;
+		ha->device_type |= DT_T10_PI;
+		ha->fw_srisc_address = RISC_START_ADDRESS_2400;
+		break;
 	}
 
 	if (IS_QLA82XX(ha))
@@ -2624,6 +2636,7 @@ qla2x00_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	    pdev->device == PCI_DEVICE_ID_QLOGIC_ISP8044 ||
 	    pdev->device == PCI_DEVICE_ID_QLOGIC_ISP2071 ||
 	    pdev->device == PCI_DEVICE_ID_QLOGIC_ISP2271 ||
+	    pdev->device == PCI_DEVICE_ID_QLOGIC_ISP2971 ||
 	    pdev->device == PCI_DEVICE_ID_QLOGIC_ISP2261) {
 		bars = pci_select_bars(pdev, IORESOURCE_MEM);
 		mem_only = 1;
@@ -6335,6 +6348,7 @@ static struct pci_device_id qla2xxx_pci_tbl[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2071) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2271) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2261) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2971) },
 	{ 0 },
 };
 MODULE_DEVICE_TABLE(pci, qla2xxx_pci_tbl);
@@ -6450,6 +6464,11 @@ qla2x00_module_exit(void)
 		kmem_cache_destroy(ctx_cachep);
 	fc_release_transport(qla2xxx_transport_template);
 	fc_release_transport(qla2xxx_transport_vport_template);
+
+#ifdef SOLIDFIRE_TEMP_WWN
+        solidfire_free_temp_wwn();
+#endif /* #ifdef SOLIDFIRE_TEMP_WWN */
+
 }
 
 module_init(qla2x00_module_init);

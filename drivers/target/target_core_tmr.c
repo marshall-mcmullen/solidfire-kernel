@@ -172,14 +172,32 @@ void core_tmr_abort_task(
 		if (tmr->ref_task_tag != ref_tag)
 			continue;
 
+#ifdef CONFIG_SOLIDFIRE_LIO
+                printk("ABORT_TASK: Found referenced %s task_tag: %llu"
+                                " se_cmd=%p state=%d\n",
+                        se_cmd->se_tfo->get_fabric_name(), ref_tag, se_cmd,
+                                se_cmd->t_state);
+#else
 		printk("ABORT_TASK: Found referenced %s task_tag: %llu\n",
 			se_cmd->se_tfo->get_fabric_name(), ref_tag);
+#endif
 
 		if (!__target_check_io_state(se_cmd, se_sess, 0))
 			continue;
 
 		list_del_init(&se_cmd->se_cmd_list);
 		spin_unlock_irqrestore(&se_sess->sess_cmd_lock, flags);
+
+#ifdef CONFIG_SOLIDFIRE_LIO
+                /*
+                 * Try to pass the abort through to the underlying device
+                 * For iSCSI this should result in terminatio of the
+                 * underlying session.
+                 */
+                if (dev->transport->abort_task) {
+                        dev->transport->abort_task(dev, se_cmd);
+                }
+#endif
 
 		cancel_work_sync(&se_cmd->work);
 		transport_wait_for_tasks(se_cmd);
@@ -395,6 +413,19 @@ int core_tmr_lun_reset(
 	struct se_portal_group *tmr_tpg = NULL;
 	struct se_session *tmr_sess = NULL;
 	int tas;
+
+#ifdef CONFIG_SOLIDFIRE_LIO
+	unsigned long flags;
+
+        spin_lock_irqsave(&dev->se_tmr_lock, flags);
+        if (dev->dev_tmr_flags & DF_TMR_LUN_RESET_ACTIVE) {
+                spin_unlock_irqrestore(&dev->se_tmr_lock, flags);
+                return -EBUSY;
+        }
+        dev->dev_tmr_flags |= DF_TMR_LUN_RESET_ACTIVE;
+        spin_unlock_irqrestore(&dev->se_tmr_lock, flags);
+#endif
+
         /*
 	 * TASK_ABORTED status bit, this is configurable via ConfigFS
 	 * struct se_device attributes.  spc4r17 section 7.4.6 Control mode page

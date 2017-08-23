@@ -8,7 +8,20 @@
 #include <linux/semaphore.h>     /* struct semaphore */
 #include <linux/completion.h>
 
+// Enable SolidFire-specific LUN masking behaviors.
+#define SOLIDFIRE_LUN
+
 #define TARGET_CORE_VERSION		"v5.0"
+
+// not sure if this is still necessary as the implementation has changed SN
+/* Maximum Number of LUNs per Target Portal Group */
+/* Don't raise above 511 or REPORT_LUNS needs to handle >1 page */
+#ifdef SOLIDFIRE_LUN
+#include <linux/timer.h>
+#define TRANSPORT_MAX_LUNS_PER_TPG              16384
+#else
+#define TRANSPORT_MAX_LUNS_PER_TPG              256
+#endif /* #ifdef SOLIDFIRE_LUN */
 
 /*
  * Maximum size of a CDB that can be stored in se_cmd without allocating
@@ -181,6 +194,7 @@ enum tcm_sense_reason_table {
 	TCM_UNSUPPORTED_TARGET_DESC_TYPE_CODE	= R(0x1a),
 	TCM_TOO_MANY_SEGMENT_DESCS		= R(0x1b),
 	TCM_UNSUPPORTED_SEGMENT_DESC_TYPE_CODE	= R(0x1c),
+	TCM_RESET_IN_PROG                       = R(0x1d),
 #undef R
 };
 
@@ -522,6 +536,10 @@ struct se_cmd {
 	unsigned int		t_prot_nents;
 	sense_reason_t		pi_err;
 	sector_t		bad_sector;
+#ifdef SOLIDFIRE_LUN
+#define CMD_DELAY_STATUS_TIME   10 * HZ
+        struct timer_list       delay_status_timer;
+#endif
 	int			cpuid;
 };
 
@@ -543,6 +561,9 @@ struct se_node_acl {
 	char			acl_tag[MAX_ACL_TAG_SIZE];
 	/* Used for PR SPEC_I_PT=1 and REGISTER_AND_MOVE */
 	atomic_t		acl_pr_ref_count;
+#ifdef CONFIG_SOLIDFIRE_LIO
+        u8                      lun_allocation_map[TRANSPORT_MAX_LUNS_PER_TPG];
+#endif
 	struct hlist_head	lun_entry_hlist;
 	struct se_session	*nacl_sess;
 	struct se_portal_group *se_tpg;
@@ -785,6 +806,10 @@ struct se_device {
 #define DRF_SPC2_RESERVATIONS_WITH_ISID		0x00000002
 	spinlock_t		se_port_lock;
 	spinlock_t		se_tmr_lock;
+#ifdef CONFIG_SOLIDFIRE_LIO
+        u32                     dev_tmr_flags;
+#define DF_TMR_LUN_RESET_ACTIVE                 0x00000001
+#endif
 	spinlock_t		qf_cmd_lock;
 	struct semaphore	caw_sem;
 	/* Used for legacy SPC-2 reservationsa */
@@ -875,6 +900,10 @@ struct se_portal_group {
 	/* linked list for initiator ACL list */
 	struct list_head	acl_node_list;
 	struct hlist_head	tpg_lun_hlist;
+#ifdef CONFIG_SOLIDFIRE_LIO
+        u32                     tpg_lun_alloc_count;
+        u32                     tpg_lun_free_list[TRANSPORT_MAX_LUNS_PER_TPG];
+#endif
 	struct se_lun		*tpg_virt_lun0;
 	/* List of TCM sessions associated wth this TPG */
 	struct list_head	tpg_sess_list;

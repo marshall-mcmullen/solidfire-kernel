@@ -1768,6 +1768,52 @@ static const struct pr_ops sd_pr_ops = {
 	.pr_clear	= sd_pr_clear,
 };
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+/**
+ * SolidFire-specific code that determines whether or not partitions should be
+ * scanned for a particular iSCSI session.  We don't want partitions to be
+ * scanned for iSCSI sessions initiated by FC Nodes because the FC node is just
+ * a passthrough device and doesn't care about what partitions are on the
+ * device.  So, we check to see if this iSCSI host's initiator name matches the
+ * FC Node initiator pattern, and if it does we inhibit the partition scan.
+ *
+ * @param bdev The block_device (which is actually a SCSI disk) for which we
+ *             are deciding whether or not to scan for partitions.
+ *
+ * @return 1 if partitions should be scanned, 0 if partitions should not be
+ *         scanned.
+ */
+int sd_should_scan_for_partitions(struct block_device* bdev)
+{
+        int should_scan = 1;
+        struct scsi_disk *sdkp = scsi_disk_get(bdev->bd_disk);
+
+        /**
+         * scsi_disk_get did not succeed, but return 1 anyway since that's what
+         * would have normally happened.
+         */
+        if (!sdkp) {
+                return should_scan;
+        }
+
+        /**
+         * Ask the lower-level driver whether or not the device should be
+         * scanned for partitions after doing gratuitous null pointer checking.
+         */
+        if (sdkp->device &&
+            sdkp->device->host &&
+            sdkp->device->host->hostt &&
+            sdkp->device->host->hostt->should_scan_for_partitions) {
+                should_scan = sdkp->device->host->hostt->
+                                  should_scan_for_partitions(sdkp->device);
+        }
+
+        scsi_disk_put(sdkp);
+        return should_scan;
+}
+#endif
+
+
 static const struct block_device_operations sd_fops = {
 	.owner			= THIS_MODULE,
 	.open			= sd_open,
@@ -1780,6 +1826,9 @@ static const struct block_device_operations sd_fops = {
 	.check_events		= sd_check_events,
 	.revalidate_disk	= sd_revalidate_disk,
 	.unlock_native_capacity	= sd_unlock_native_capacity,
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        .should_scan_for_partitions = sd_should_scan_for_partitions,
+#endif
 	.pr_ops			= &sd_pr_ops,
 };
 

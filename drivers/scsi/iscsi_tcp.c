@@ -598,6 +598,14 @@ static void iscsi_sw_tcp_release_conn(struct iscsi_conn *conn)
 
 	sock_hold(sock->sk);
 	iscsi_sw_tcp_conn_restore_callbacks(conn);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        if (session->sessfail_fast) {
+                lock_sock(sock->sk);
+                if (sock->sk->sk_state != TCP_CLOSE)
+                        tcp_set_state(sock->sk, TCP_CLOSE);
+                release_sock(sock->sk);
+        }
+#endif
 	sock_put(sock->sk);
 
 	spin_lock_bh(&session->frwd_lock);
@@ -979,6 +987,9 @@ static struct scsi_host_template iscsi_sw_tcp_sht = {
 	.proc_name		= "iscsi_tcp",
 	.this_id		= -1,
 	.track_queue_depth	= 1,
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        .should_scan_for_partitions = iscsi_should_scan_for_partitions,
+#endif
 };
 
 static struct iscsi_transport iscsi_sw_tcp_transport = {

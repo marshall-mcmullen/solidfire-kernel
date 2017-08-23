@@ -10,6 +10,9 @@ struct scsi_sense_hdr;
 extern void scsi_print_command(struct scsi_cmnd *);
 extern size_t __scsi_format_command(char *, size_t,
 				   const unsigned char *, size_t);
+#ifdef CONFIG_SOLIDFIRE_LIO
+extern void scsi_cdb_to_string(unsigned char *, char *);
+#endif
 extern void scsi_show_extd_sense(const struct scsi_device *, const char *,
 				 unsigned char, unsigned char);
 extern void scsi_print_sense_hdr(const struct scsi_device *, const char *,

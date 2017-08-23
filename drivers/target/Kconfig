@@ -40,8 +40,14 @@ config TCM_USER2
 	process to handle requests. This is version 2 of the ABI; version 1
 	is obsolete.
 
+config SOLIDFIRE_LIO
+        bool "SolidFire modifications to TCM"
+        help
+        Say Y here to enable the SolidFire modifications to TCM.
+
+
 source "drivers/target/loopback/Kconfig"
-source "drivers/target/tcm_fc/Kconfig"
+#source "drivers/target/tcm_fc/Kconfig"
 source "drivers/target/iscsi/Kconfig"
 source "drivers/target/sbp/Kconfig"
 

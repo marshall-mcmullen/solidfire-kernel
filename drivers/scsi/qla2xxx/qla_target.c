@@ -34,6 +34,9 @@
 #include <linux/workqueue.h>
 #include <asm/unaligned.h>
 #include <scsi/scsi.h>
+#ifdef CONFIG_SOLIDFIRE_LIO
+#include <scsi/scsi_dbg.h>
+#endif
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_tcq.h>
 #include <target/target_core_base.h>
@@ -41,6 +44,23 @@
 
 #include "qla_def.h"
 #include "qla_target.h"
+
+#ifdef SOLIDFIRE_TEMP_WWN
+extern void solidfire_get_temp_wwn(scsi_qla_host_t *vha, uint8_t *wwnn,
+                                   uint8_t *wwpn);
+
+int qlt_latency_warn_threshold = 10*HZ;
+module_param(qlt_latency_warn_threshold, int, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(qlt_latency_warn_threshold,
+        "Commands with latency exceeding this value (in jiffies) are logged.");
+
+int qlt_latency_warn_period = 60*HZ;
+module_param(qlt_latency_warn_period, int, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(qlt_latency_warn_period,
+        "Only log latency threshold violations once per period per IT. "
+        "0 means log all violations. Changing only affects new sessions.");
+
+#endif /* #ifdef SOLIDFIRE_TEMP_WWN */
 
 static int ql2xtgt_tape_enable;
 module_param(ql2xtgt_tape_enable, int, S_IRUGO|S_IWUSR);
@@ -1333,6 +1353,9 @@ static struct fc_port *qlt_create_sess(
 
 		qlt_do_generation_tick(vha, &sess->generation);
 		spin_unlock_irqrestore(&ha->tgt.sess_lock, flags);
+#ifdef CONFIG_SOLIDFIRE_LIO
+                qla2x00_reg_remote_port(vha, sess);
+#endif
 	}
 
 	ql_dbg(ql_dbg_tgt_mgt, vha, 0xf006,
@@ -5240,6 +5263,7 @@ static void qlt_24xx_atio_pkt(struct scsi_qla_host *vha,
 		    "ATIO pkt, but no tgt (ha %p)", ha);
 		return;
 	}
+
 	/*
 	 * In tgt_stop mode we also should allow all requests to pass.
 	 * Otherwise, some commands can stuck.
@@ -6107,6 +6131,11 @@ int qlt_lport_register(void *target_lport_ptr, u64 phys_wwpn,
 	unsigned long flags;
 	int rc;
 	u8 b[WWN_SIZE];
+#ifdef SOLIDFIRE_TEMP_WWN
+        uint8_t solidfire_zero_wwn[WWN_SIZE] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+        uint8_t solidfire_temp_wwnn[WWN_SIZE];
+        uint8_t solidfire_temp_wwpn[WWN_SIZE];
+#endif /* #ifdef SOLIDFIRE_TEMP_WWN */
 
 	mutex_lock(&qla_tgt_mutex);
 	list_for_each_entry(tgt, &qla_tgt_glist, tgt_list_entry) {
@@ -6143,10 +6172,23 @@ int qlt_lport_register(void *target_lport_ptr, u64 phys_wwpn,
 		}
 		qlt_lport_dump(vha, phys_wwpn, b);
 
-		if (memcmp(vha->port_name, b, WWN_SIZE)) {
-			scsi_host_put(host);
-			continue;
-		}
+#ifdef SOLIDFIRE_TEMP_WWN
+                // We *require* that the solidfire temp WWN is set.  Don't let the port
+                // get created otherwise.  This way we should never be able to turn on
+                // the port with its physical WWN.
+                solidfire_get_temp_wwn(vha, solidfire_temp_wwnn, solidfire_temp_wwpn);
+                if (memcmp(solidfire_temp_wwpn, solidfire_zero_wwn, WWN_SIZE) == 0 ||
+                    memcmp(solidfire_temp_wwpn, b, WWN_SIZE)                  != 0) {
+                        scsi_host_put(host);
+                        continue;
+                }
+#else
+                if (memcmp(vha->port_name, b, WWN_SIZE)) {
+                        scsi_host_put(host);
+                        continue;
+                }
+#endif
+
 		rc = (*callback)(vha, target_lport_ptr, npiv_wwpn, npiv_wwnn);
 		if (rc != 0)
 			scsi_host_put(host);

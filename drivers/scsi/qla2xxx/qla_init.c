@@ -20,6 +20,11 @@
 #include <target/target_core_base.h>
 #include "qla_target.h"
 
+#ifdef SOLIDFIRE_TEMP_WWN
+extern void solidfire_get_temp_wwn(scsi_qla_host_t *vha, uint8_t *wwnn,
+                                   uint8_t *wwpn);
+#endif /* #ifdef SOLIDFIRE_TEMP_WWN */
+
 /*
 *  QLogic ISP2x00 Hardware Support Function Prototypes.
 */
@@ -4269,7 +4274,7 @@ qla2x00_iidma_fcport(scsi_qla_host_t *vha, fc_port_t *fcport)
 }
 
 /* qla2x00_reg_remote_port is reserved for Initiator Mode only.*/
-static void
+void
 qla2x00_reg_remote_port(scsi_qla_host_t *vha, fc_port_t *fcport)
 {
 	struct fc_rport_identifiers rport_ids;
@@ -6934,6 +6939,12 @@ qla81xx_nvram_config(scsi_qla_host_t *vha)
 	uint16_t cnt;
 	struct qla_hw_data *ha = vha->hw;
 
+#ifdef SOLIDFIRE_TEMP_WWN
+        uint8_t solidfire_zero_wwn[WWN_SIZE] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+        uint8_t solidfire_temp_wwnn[WWN_SIZE];
+        uint8_t solidfire_temp_wwpn[WWN_SIZE];
+#endif /* #ifdef SOLIDFIRE_TEMP_WWN */
+
 	rval = QLA_SUCCESS;
 	icb = (struct init_cb_81xx *)ha->init_cb;
 	nv = ha->nvram;
@@ -7075,6 +7086,34 @@ qla81xx_nvram_config(scsi_qla_host_t *vha)
 		memcpy(icb->node_name, nv->alternate_node_name, WWN_SIZE);
 		memcpy(icb->port_name, nv->alternate_port_name, WWN_SIZE);
 	}
+
+#ifdef SOLIDFIRE_TEMP_WWN
+        solidfire_get_temp_wwn(vha, solidfire_temp_wwnn, solidfire_temp_wwpn);
+
+        ql_log(ql_log_info, vha, 0x015c, "SolidFire Temp WWN - "
+               "WWNN(%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x) "
+               "WWPN(%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x)\n",
+               (int)solidfire_temp_wwnn[0], (int)solidfire_temp_wwnn[1],
+               (int)solidfire_temp_wwnn[2], (int)solidfire_temp_wwnn[3],
+               (int)solidfire_temp_wwnn[4], (int)solidfire_temp_wwnn[5],
+               (int)solidfire_temp_wwnn[6], (int)solidfire_temp_wwnn[7],
+               (int)solidfire_temp_wwpn[0], (int)solidfire_temp_wwpn[1],
+               (int)solidfire_temp_wwpn[2], (int)solidfire_temp_wwpn[3],
+               (int)solidfire_temp_wwpn[4], (int)solidfire_temp_wwpn[5],
+               (int)solidfire_temp_wwpn[6], (int)solidfire_temp_wwpn[7]);
+
+        /* Set the temporary SolidFire WWNN on the HBA if it is non-zero. */
+        if (memcmp(solidfire_temp_wwnn, solidfire_zero_wwn, WWN_SIZE) != 0) {
+                memcpy(icb->node_name, solidfire_temp_wwnn, WWN_SIZE);
+                icb->firmware_options_1 |= __constant_cpu_to_le32(BIT_14);
+        }
+
+        /* Set the temporary SolidFire WWPN on the HBA if it is non-zero. */
+        if (memcmp(solidfire_temp_wwpn, solidfire_zero_wwn, WWN_SIZE) != 0) {
+                memcpy(icb->port_name, solidfire_temp_wwpn, WWN_SIZE);
+                icb->firmware_options_1 |= __constant_cpu_to_le32(BIT_14);
+        }
+#endif /* #ifdef SOLIDFIRE_TEMP_WWN */
 
 	/* Prepare nodename */
 	if ((icb->firmware_options_1 & cpu_to_le32(BIT_14)) == 0) {
