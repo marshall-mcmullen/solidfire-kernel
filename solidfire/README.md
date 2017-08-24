@@ -175,7 +175,8 @@ We use this process to get around the problems:
 6. Merge the old solidfire branch into the new solidfire branch in the
    usual way: `git merge solidfire/4.11`
 
-7. Tag it & push it.
+7. Tag it ("solidfire/v4.12.3-solidfire0").  Push the new branch, the
+   new solidfire tag, and the upstream "vX.Y.Z" tag that it's based on.
 
 Then follow the standard build process for getting the new kernel
 into ember: In solidfire-portage, make an ebuild, commit it, tag it,
