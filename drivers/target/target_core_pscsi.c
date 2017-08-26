@@ -47,16 +47,26 @@
 #include "target_core_internal.h"
 #include "target_core_pscsi.h"
 
-/* sense bytes for reset rejected cmnds SK, ASC, ASCQ */
+#ifdef SOLIDFIRE_LUN
+/* sense bytes for host bytes: SK, ASC, ASCQ */
 #define SOLIDFIRE_SENSE_PARAM(name, value, desc) \
-        static int pscsi_reset_##name = value; \
-        module_param_named(pscsi_reset_##name, pscsi_reset_##name, int, \
+	static int pscsi_##name = value; \
+	module_param_named(pscsi_##name, pscsi_##name, int, \
                 S_IRUGO | S_IWUSR); \
-        MODULE_PARM_DESC(pscsi_reset_##name, desc);
+	MODULE_PARM_DESC(pscsi_##name, desc);
 
-SOLIDFIRE_SENSE_PARAM(sense_key, 0x02, "The sense key to return by default on errors. (4 bits)");
-SOLIDFIRE_SENSE_PARAM(asc,       0x04, "The additional sense code to return by default on errors. (8 bits)");
-SOLIDFIRE_SENSE_PARAM(ascq,      0x01, "The additional sense code qualifier to return by default on errors. (8 bits)");
+/* Sense information for DID_RESET */
+SOLIDFIRE_SENSE_PARAM(reset_status,	   0x02, "The SCSI status to return by default on DID_RESET. (4 bits)");
+SOLIDFIRE_SENSE_PARAM(reset_sense_key, 0x02, "The sense key to return by default on DID_RESET. (4 bits)");
+SOLIDFIRE_SENSE_PARAM(reset_asc,       0x04, "The additional sense code to return by default on DID_RESET. (8 bits)");
+SOLIDFIRE_SENSE_PARAM(reset_ascq,      0x01, "The additional sense code qualifier to return by default on DID_RESET. (8 bits)");
+
+/* Sense information for DID_SOFT_ERROR (except INQUIRY, which is hard-coded to BUSY) */
+SOLIDFIRE_SENSE_PARAM(soft_error_status,	0x02, "The SCSI status to return by default on DID_SOFT_ERROR. (4 bits)");
+SOLIDFIRE_SENSE_PARAM(soft_error_sense_key, 0x02, "The sense key to return by default on DID_SOFT_ERROR. (4 bits)");
+SOLIDFIRE_SENSE_PARAM(soft_error_asc,		0x04, "The additional sense code to return by default on DID_SOFT_ERROR. (8 bits)");
+SOLIDFIRE_SENSE_PARAM(soft_error_ascq,		0x0c, "The additional sense code qualifier to return by default on DID_SOFT_ERROR. (8 bits)");
+#endif
 
 #define ISPRINT(a)  ((a >= ' ') && (a <= '~'))
 
