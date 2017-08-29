@@ -25,4 +25,4 @@ set -x
 
 cp solidfire/kernel.config .config
 
-make -j $(($(nproc --all) + 1)) deb-pkg LOCALVERSION=-$(git rev-parse --abbrev-ref HEAD)-$(git describe --tags --abbrev=6 --dirty) KDEB_PKGVERSION=$(make kernelversion)
+make -j $(($(nproc --all) + 1)) bindeb-pkg LOCALVERSION=-$(git rev-parse --abbrev-ref HEAD)-$(git describe --tags --abbrev=6 --dirty) KDEB_PKGVERSION=$(make kernelversion)
