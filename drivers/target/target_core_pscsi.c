@@ -1171,6 +1171,19 @@ static void pscsi_delay_status_timer_fn(unsigned long arg)
         target_complete_cmd(cmd, SAM_STAT_CHECK_CONDITION);
         kfree(pt);
 }
+
+static void pscsi_set_sense_buffer(struct pscsi_plugin_task *pt, int key, int asc, int ascq)
+{
+	if (key != 0) {
+		memset(pt->pscsi_sense, 0, sizeof(pt->pscsi_sense));
+		pt->pscsi_sense[0] = 0x70;
+		pt->pscsi_sense[SPC_ADD_SENSE_LEN_OFFSET] = 10;
+		pt->pscsi_sense[SPC_SENSE_KEY_OFFSET]     = key & 0x0f;
+		pt->pscsi_sense[SPC_ASC_KEY_OFFSET]       = asc;
+		pt->pscsi_sense[SPC_ASCQ_KEY_OFFSET]      = ascq;
+		pt->pscsi_result = (DID_OK << 16) | (CHECK_CONDITION << 1);
+	}
+}
 #endif
 
 static void pscsi_req_done(struct request *req, int uptodate)
@@ -1197,17 +1210,10 @@ static void pscsi_req_done(struct request *req, int uptodate)
 		break;
 #ifdef SOLIDFIRE_LUN
         case DID_RESET:
-                if (pscsi_reset_sense_key != 0) {
-                        memset(pt->pscsi_sense, 0, sizeof(pt->pscsi_sense));
-                        pt->pscsi_sense[0] = 0x70;
-                        pt->pscsi_sense[SPC_ADD_SENSE_LEN_OFFSET] = 10;
-                        pt->pscsi_sense[SPC_SENSE_KEY_OFFSET]     = pscsi_reset_sense_key & 0x0f;
-                        pt->pscsi_sense[SPC_ASC_KEY_OFFSET]       = pscsi_reset_asc;
-                        pt->pscsi_sense[SPC_ASCQ_KEY_OFFSET]      = pscsi_reset_ascq;
-                        pt->pscsi_result =
-                                (DID_OK << 16) | (CHECK_CONDITION << 1);
-                }
-                target_complete_cmd(cmd, SAM_STAT_CHECK_CONDITION);
+		if (pscsi_reset_status == SAM_STAT_CHECK_CONDITION)
+			pscsi_set_sense_buffer(pt, pscsi_reset_sense_key, pscsi_reset_asc, 
+					pscsi_reset_ascq);
+		target_complete_cmd(cmd, pscsi_reset_status);
                 break;
         case DID_ERROR:
                 /*
