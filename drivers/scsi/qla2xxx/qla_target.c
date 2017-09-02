@@ -6981,11 +6981,18 @@ int __init qlt_init(void)
 {
 	int ret;
 
+// systemd is not honoring the conf file in /etc/modprobe.d/ 
+// initiator disabled is the only option and it is the default
+// for solidfire solution
+#ifdef SOLIDFIRE_TEMP_WWN 
+	ql2x_ini_mode = QLA2XXX_INI_MODE_DISABLED;
+#else
 	if (!qlt_parse_ini_mode()) {
 		ql_log(ql_log_fatal, NULL, 0xe06b,
 		    "qlt_parse_ini_mode() failed\n");
 		return -EINVAL;
 	}
+#endif
 
 	if (!QLA_TGT_MODE_ENABLED())
 		return 0;
