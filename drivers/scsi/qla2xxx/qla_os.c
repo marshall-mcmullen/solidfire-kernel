@@ -355,6 +355,28 @@ int qla2xxx_mqueuecommand(struct Scsi_Host *host, struct scsi_cmnd *cmd,
 	struct qla_qpair *qpair);
 
 /* -------------------------------------------------------------------------- */
+static void qla_init_base_qpair(struct scsi_qla_host *vha, struct req_que *req,
+    struct rsp_que *rsp)
+{
+	struct qla_hw_data *ha = vha->hw;
+	rsp->qpair = ha->base_qpair;
+	rsp->req = req;
+	ha->base_qpair->req = req;
+	ha->base_qpair->rsp = rsp;
+	ha->base_qpair->vha = vha;
+	ha->base_qpair->qp_lock_ptr = &ha->hardware_lock;
+	ha->base_qpair->use_shadow_reg = IS_SHADOW_REG_CAPABLE(ha) ? 1 : 0;
+	ha->base_qpair->msix = &ha->msix_entries[QLA_MSIX_RSP_Q];
+	INIT_LIST_HEAD(&ha->base_qpair->hints_list);
+	ha->base_qpair->enable_class_2 = ql2xenableclass2;
+	/* init qpair to this cpu. Will adjust at run time. */
+	qla_cpu_update(rsp->qpair, smp_processor_id());
+	ha->base_qpair->pdev = ha->pdev;
+
+	if (IS_QLA27XX(ha) || IS_QLA83XX(ha))
+		ha->base_qpair->reqq_start_iocbs = qla_83xx_start_iocbs;
+}
+
 static int qla2x00_alloc_queues(struct qla_hw_data *ha, struct req_que *req,
 				struct rsp_que *rsp)
 {
@@ -375,6 +397,15 @@ static int qla2x00_alloc_queues(struct qla_hw_data *ha, struct req_que *req,
 		goto fail_rsp_map;
 	}
 
+	ha->base_qpair = kzalloc(sizeof(struct qla_qpair), GFP_KERNEL);
+	if (ha->base_qpair == NULL) {
+		ql_log(ql_log_warn, vha, 0x00e0,
+		    "Failed to allocate base queue pair memory.\n");
+		goto fail_base_qpair;
+	}
+
+	qla_init_base_qpair(vha, req, rsp);
+
 	if (ql2xmqsupport && ha->max_qpairs) {
 		ha->queue_pair_map = kcalloc(ha->max_qpairs, sizeof(struct qla_qpair *),
 			GFP_KERNEL);
@@ -383,14 +414,6 @@ static int qla2x00_alloc_queues(struct qla_hw_data *ha, struct req_que *req,
 			    "Unable to allocate memory for queue pair ptrs.\n");
 			goto fail_qpair_map;
 		}
-		ha->base_qpair = kzalloc(sizeof(struct qla_qpair), GFP_KERNEL);
-		if (ha->base_qpair == NULL) {
-			ql_log(ql_log_warn, vha, 0x00e0,
-			    "Failed to allocate base queue pair memory.\n");
-			goto fail_base_qpair;
-		}
-		ha->base_qpair->req = req;
-		ha->base_qpair->rsp = rsp;
 	}
 
 	/*
@@ -403,9 +426,10 @@ static int qla2x00_alloc_queues(struct qla_hw_data *ha, struct req_que *req,
 	set_bit(0, ha->req_qid_map);
 	return 1;
 
-fail_base_qpair:
-	kfree(ha->queue_pair_map);
 fail_qpair_map:
+	kfree(ha->base_qpair);
+	ha->base_qpair = NULL;
+fail_base_qpair:
 	kfree(ha->rsp_q_map);
 	ha->rsp_q_map = NULL;
 fail_rsp_map:
@@ -454,6 +478,15 @@ static void qla2x00_free_queues(struct qla_hw_data *ha)
 	struct rsp_que *rsp;
 	int cnt;
 	unsigned long flags;
+
+	if (ha->queue_pair_map) {
+		kfree(ha->queue_pair_map);
+		ha->queue_pair_map = NULL;
+	}
+	if (ha->base_qpair) {
+		kfree(ha->base_qpair);
+		ha->base_qpair = NULL;
+	}
 
 	spin_lock_irqsave(&ha->hardware_lock, flags);
 	for (cnt = 0; cnt < ha->max_req_queues; cnt++) {
@@ -1656,8 +1689,9 @@ qla2x00_abort_all_cmds(scsi_qla_host_t *vha, int res)
 	srb_t *sp;
 	struct qla_hw_data *ha = vha->hw;
 	struct req_que *req;
-
-	qlt_host_reset_handler(ha);
+	struct qla_tgt *tgt = vha->vha_tgt.qla_tgt;
+	struct qla_tgt_cmd *cmd;
+	uint8_t trace = 0;
 
 	spin_lock_irqsave(&ha->hardware_lock, flags);
 	for (que = 0; que < ha->max_req_queues; que++) {
@@ -1669,27 +1703,57 @@ qla2x00_abort_all_cmds(scsi_qla_host_t *vha, int res)
 		for (cnt = 1; cnt < req->num_outstanding_cmds; cnt++) {
 			sp = req->outstanding_cmds[cnt];
 			if (sp) {
-				/* Don't abort commands in adapter during EEH
-				 * recovery as it's not accessible/responding.
-				 */
-				if (GET_CMD_SP(sp) && !ha->flags.eeh_busy &&
-				    (sp->type == SRB_SCSI_CMD)) {
-					/* Get a reference to the sp and drop the lock.
-					 * The reference ensures this sp->done() call
-					 * - and not the call in qla2xxx_eh_abort() -
-					 * ends the SCSI command (with result 'res').
-					 */
-					sp_get(sp);
-					spin_unlock_irqrestore(&ha->hardware_lock, flags);
-					status = qla2xxx_eh_abort(GET_CMD_SP(sp));
-					spin_lock_irqsave(&ha->hardware_lock, flags);
-					/* Get rid of extra reference if immediate exit
-					 * from ql2xxx_eh_abort */
-					if (status == FAILED && (qla2x00_isp_reg_stat(ha)))
-						atomic_dec(&sp->ref_count);
-				}
 				req->outstanding_cmds[cnt] = NULL;
-				sp->done(sp, res);
+				if (sp->cmd_type == TYPE_SRB) {
+					/*
+					 * Don't abort commands in adapter
+					 * during EEH recovery as it's not
+					 * accessible/responding.
+					 */
+					if (GET_CMD_SP(sp) &&
+					    !ha->flags.eeh_busy &&
+					    (sp->type == SRB_SCSI_CMD)) {
+						/*
+						 * Get a reference to the sp
+						 * and drop the lock. The
+						 * reference ensures this
+						 * sp->done() call and not the
+						 * call in qla2xxx_eh_abort()
+						 * ends the SCSI command (with
+						 * result 'res').
+						 */
+						sp_get(sp);
+						spin_unlock_irqrestore(
+						    &ha->hardware_lock, flags);
+						status = qla2xxx_eh_abort(
+						    GET_CMD_SP(sp));
+						spin_lock_irqsave(
+						    &ha->hardware_lock, flags);
+						/*
+						 * Get rid of extra reference
+						 * if immediate exit from
+						 * ql2xxx_eh_abort
+						 */
+						if (status == FAILED &&
+						    (qla2x00_isp_reg_stat(ha)))
+							atomic_dec(
+							    &sp->ref_count);
+					}
+					sp->done(sp, res);
+				} else {
+					if (!vha->hw->tgt.tgt_ops || !tgt ||
+					    qla_ini_mode_enabled(vha)) {
+						if (!trace)
+							ql_dbg(ql_dbg_tgt_mgt,
+							    vha, 0xf003,
+							    "HOST-ABORT-HNDLR: dpc_flags=%lx. Target mode disabled\n",
+							    vha->dpc_flags);
+						continue;
+					}
+					cmd = (struct qla_tgt_cmd *)sp;
+					qlt_abort_cmd_on_host_reset(cmd->vha,
+					    cmd);
+				}
 			}
 		}
 	}
@@ -1968,7 +2032,7 @@ qla83xx_iospace_config(struct qla_hw_data *ha)
 		/* Read MSIX vector size of the board */
 		pci_read_config_word(ha->pdev,
 		    QLA_83XX_PCI_MSIX_CONTROL, &msix);
-		ha->msix_count = msix + 1;
+		ha->msix_count = (msix & PCI_MSIX_FLAGS_QSIZE)  + 1;
 		/*
 		 * By default, driver uses at least two msix vectors
 		 * (default & rspq)
@@ -2673,7 +2737,6 @@ qla2x00_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	ql_dbg_pci(ql_dbg_init, pdev, 0x000a,
 	    "Memory allocated for ha=%p.\n", ha);
 	ha->pdev = pdev;
-	ha->tgt.enable_class_2 = ql2xenableclass2;
 	INIT_LIST_HEAD(&ha->tgt.q_full_list);
 	spin_lock_init(&ha->tgt.q_full_lock);
 	spin_lock_init(&ha->tgt.sess_lock);
@@ -3093,12 +3156,26 @@ qla2x00_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	    host->can_queue, base_vha->req,
 	    base_vha->mgmt_svr_loop_id, host->sg_tablesize);
 
-	if (ha->mqenable && qla_ini_mode_enabled(base_vha)) {
+	if (ha->mqenable) {
+		bool mq = false;
+		bool startit = false;
 		ha->wq = alloc_workqueue("qla2xxx_wq", WQ_MEM_RECLAIM, 1);
-		/* Create start of day qpairs for Block MQ */
-		if (shost_use_blk_mq(host)) {
+
+		if (QLA_TGT_MODE_ENABLED()) {
+			mq = true;
+			startit = false;
+		}
+
+		if ((ql2x_ini_mode == QLA2XXX_INI_MODE_ENABLED) &&
+		    shost_use_blk_mq(host)) {
+			mq = true;
+			startit = true;
+		}
+
+		if (mq) {
+			/* Create start of day qpairs for Block MQ */
 			for (i = 0; i < ha->max_qpairs; i++)
-				qla2xxx_create_qpair(base_vha, 5, 0);
+				qla2xxx_create_qpair(base_vha, 5, 0, startit);
 		}
 	}
 
@@ -4114,9 +4191,6 @@ qla2x00_set_exchoffld_buffer(scsi_qla_host_t *vha)
 
 	if (!IS_EXCHG_OFFLD_CAPABLE(ha))
 		return QLA_SUCCESS;
-
-	ql_log(ql_log_info, vha, 0xd014,
-	    "Exchange offload count: %d.\n", ql2xexlogins);
 
 	max_cnt = 0;
 	rval = qla_get_exchoffld_status(vha, &size, &max_cnt);
@@ -5877,6 +5951,8 @@ qla2x00_timer(scsi_qla_host_t *vha)
 
 					sp = req->outstanding_cmds[index];
 					if (!sp)
+						continue;
+					if (sp->cmd_type != TYPE_SRB)
 						continue;
 					if (sp->type != SRB_SCSI_CMD)
 						continue;
