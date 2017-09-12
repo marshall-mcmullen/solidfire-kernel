@@ -9,6 +9,7 @@
 
 #include <linux/delay.h>
 #include <linux/slab.h>
+#include <linux/cpu.h>
 #include <linux/t10-pi.h>
 #include <scsi/scsi_tcq.h>
 #include <scsi/scsi_bsg_fc.h>
@@ -17,7 +18,7 @@
 static void qla2x00_mbx_completion(scsi_qla_host_t *, uint16_t);
 static void qla2x00_status_entry(scsi_qla_host_t *, struct rsp_que *, void *);
 static void qla2x00_status_cont_entry(struct rsp_que *, sts_cont_entry_t *);
-static void qla2x00_error_entry(scsi_qla_host_t *, struct rsp_que *,
+static int qla2x00_error_entry(scsi_qla_host_t *, struct rsp_que *,
 	sts_entry_t *);
 
 /**
@@ -709,7 +710,7 @@ skip_rio:
 
 		ha->isp_ops->fw_dump(vha, 1);
 		ha->flags.fw_init_done = 0;
-		ha->flags.fw_started = 0;
+		QLA_FW_STOPPED(ha);
 
 		if (IS_FWI2_CAPABLE(ha)) {
 			if (mb[1] == 0 && mb[2] == 0) {
@@ -2280,6 +2281,14 @@ qla2x00_status_entry(scsi_qla_host_t *vha, struct rsp_que *rsp, void *pkt)
 		return;
 	}
 
+	if (sp->cmd_type != TYPE_SRB) {
+		req->outstanding_cmds[handle] = NULL;
+		ql_dbg(ql_dbg_io, vha, 0x3015,
+		    "Unknown sp->cmd_type %x %p).\n",
+		    sp->cmd_type, sp);
+		return;
+	}
+
 	if (unlikely((state_flags & BIT_1) && (sp->type == SRB_BIDI_CMD))) {
 		qla25xx_process_bidir_status_iocb(vha, pkt, req, handle);
 		return;
@@ -2632,8 +2641,9 @@ qla2x00_status_cont_entry(struct rsp_que *rsp, sts_cont_entry_t *pkt)
  * qla2x00_error_entry() - Process an error entry.
  * @ha: SCSI driver HA context
  * @pkt: Entry pointer
+ * return : 1=allow further error analysis. 0=no additional error analysis.
  */
-static void
+static int
 qla2x00_error_entry(scsi_qla_host_t *vha, struct rsp_que *rsp, sts_entry_t *pkt)
 {
 	srb_t *sp;
@@ -2644,7 +2654,8 @@ qla2x00_error_entry(scsi_qla_host_t *vha, struct rsp_que *rsp, sts_entry_t *pkt)
 	int res = DID_ERROR << 16;
 
 	ql_dbg(ql_dbg_async, vha, 0x502a,
-	    "type of error status in response: 0x%x\n", pkt->entry_status);
+	    "iocb type %xh with error status %xh, handle %xh, rspq id %d\n",
+	    pkt->entry_type, pkt->entry_status, pkt->handle, rsp->id);
 
 	if (que >= ha->max_req_queues || !ha->req_q_map[que])
 		goto fatal;
@@ -2654,18 +2665,35 @@ qla2x00_error_entry(scsi_qla_host_t *vha, struct rsp_que *rsp, sts_entry_t *pkt)
 	if (pkt->entry_status & RF_BUSY)
 		res = DID_BUS_BUSY << 16;
 
-	if (pkt->entry_type == NOTIFY_ACK_TYPE &&
-	    pkt->handle == QLA_TGT_SKIP_HANDLE)
-		return;
+	if ((pkt->handle & ~QLA_TGT_HANDLE_MASK) == QLA_TGT_SKIP_HANDLE)
+		return 0;
 
-	sp = qla2x00_get_sp_from_handle(vha, func, req, pkt);
-	if (sp) {
-		sp->done(sp, res);
-		return;
+	switch (pkt->entry_type) {
+	case NOTIFY_ACK_TYPE:
+	case STATUS_TYPE:
+	case STATUS_CONT_TYPE:
+	case LOGINOUT_PORT_IOCB_TYPE:
+	case CT_IOCB_TYPE:
+	case ELS_IOCB_TYPE:
+	case ABORT_IOCB_TYPE:
+	case MBX_IOCB_TYPE:
+		sp = qla2x00_get_sp_from_handle(vha, func, req, pkt);
+		if (sp) {
+			sp->done(sp, res);
+			return 0;
+		}
+		break;
+
+	case ABTS_RESP_24XX:
+	case CTIO_TYPE7:
+	case CTIO_CRC2:
+	default:
+		return 1;
 	}
 fatal:
 	ql_log(ql_log_warn, vha, 0x5030,
 	    "Error entry - invalid handle/queue (%04x).\n", que);
+	return 0;
 }
 
 /**
@@ -2734,6 +2762,9 @@ void qla24xx_process_response_queue(struct scsi_qla_host *vha,
 	if (!ha->flags.fw_started)
 		return;
 
+	if (rsp->qpair->cpuid != smp_processor_id())
+		qla_cpu_update(rsp->qpair, smp_processor_id());
+
 	while (rsp->ring_ptr->signature != RESPONSE_PROCESSED) {
 		pkt = (struct sts_entry_24xx *)rsp->ring_ptr;
 
@@ -2746,9 +2777,7 @@ void qla24xx_process_response_queue(struct scsi_qla_host *vha,
 		}
 
 		if (pkt->entry_status != 0) {
-			qla2x00_error_entry(vha, rsp, (sts_entry_t *) pkt);
-
-			if (qlt_24xx_process_response_error(vha, pkt))
+			if (qla2x00_error_entry(vha, rsp, (sts_entry_t *) pkt))
 				goto process_err;
 
 			((response_t *)pkt)->signature = RESPONSE_PROCESSED;
@@ -2781,7 +2810,8 @@ process_err:
 		case ABTS_RECV_24XX:
 			if (IS_QLA83XX(ha) || IS_QLA27XX(ha)) {
 				/* ensure that the ATIO queue is empty */
-				qlt_handle_abts_recv(vha, (response_t *)pkt);
+				qlt_handle_abts_recv(vha, rsp,
+				    (response_t *)pkt);
 				break;
 			} else {
 				/* drop through */
@@ -2790,11 +2820,12 @@ process_err:
 		case ABTS_RESP_24XX:
 		case CTIO_TYPE7:
 		case CTIO_CRC2:
-			qlt_response_pkt_all_vps(vha, (response_t *)pkt);
+			qlt_response_pkt_all_vps(vha, rsp, (response_t *)pkt);
 			break;
 		case NOTIFY_ACK_TYPE:
 			if (pkt->handle == QLA_TGT_SKIP_HANDLE)
-				qlt_response_pkt_all_vps(vha, (response_t *)pkt);
+				qlt_response_pkt_all_vps(vha, rsp,
+				    (response_t *)pkt);
 			else
 				qla24xxx_nack_iocb_entry(vha, rsp->req,
 					(struct nack_to_isp *)pkt);
@@ -3169,10 +3200,10 @@ struct qla_init_msix_entry {
 };
 
 static const struct qla_init_msix_entry msix_entries[] = {
-	{ "qla2xxx (default)", qla24xx_msix_default },
-	{ "qla2xxx (rsp_q)", qla24xx_msix_rsp_q },
-	{ "qla2xxx (atio_q)", qla83xx_msix_atio_q },
-	{ "qla2xxx (qpair_multiq)", qla2xxx_msix_rsp_q },
+	{ "default", qla24xx_msix_default },
+	{ "rsp_q", qla24xx_msix_rsp_q },
+	{ "atio_q", qla83xx_msix_atio_q },
+	{ "qpair_multiq", qla2xxx_msix_rsp_q },
 };
 
 static const struct qla_init_msix_entry qla82xx_msix_entries[] = {
@@ -3196,9 +3227,14 @@ qla24xx_enable_msix(struct qla_hw_data *ha, struct rsp_que *rsp)
 		min_vecs++;
 	}
 
-	ret = pci_alloc_irq_vectors_affinity(ha->pdev, min_vecs,
-			ha->msix_count, PCI_IRQ_MSIX | PCI_IRQ_AFFINITY,
-			&desc);
+	if (USER_CTRL_IRQ(ha)) {
+		/* user wants to control IRQ setting for target mode */
+		ret = pci_alloc_irq_vectors(ha->pdev, min_vecs,
+		    ha->msix_count, PCI_IRQ_MSIX);
+	} else
+		ret = pci_alloc_irq_vectors_affinity(ha->pdev, min_vecs,
+		    ha->msix_count, PCI_IRQ_MSIX | PCI_IRQ_AFFINITY,
+		    &desc);
 
 	if (ret < 0) {
 		ql_log(ql_log_fatal, vha, 0x00c7,
@@ -3252,7 +3288,7 @@ qla24xx_enable_msix(struct qla_hw_data *ha, struct rsp_que *rsp)
 		qentry->handle = rsp;
 		rsp->msix = qentry;
 		scnprintf(qentry->name, sizeof(qentry->name),
-		    "%s", msix_entries[i].name);
+		    "qla2xxx%lu_%s", vha->host_no, msix_entries[i].name);
 		if (IS_P3P_TYPE(ha))
 			ret = request_irq(qentry->vector,
 				qla82xx_msix_entries[i].handler,
@@ -3260,7 +3296,7 @@ qla24xx_enable_msix(struct qla_hw_data *ha, struct rsp_que *rsp)
 		else
 			ret = request_irq(qentry->vector,
 				msix_entries[i].handler,
-				0, msix_entries[i].name, rsp);
+				0, qentry->name, rsp);
 		if (ret)
 			goto msix_register_fail;
 		qentry->have_irq = 1;
@@ -3276,11 +3312,12 @@ qla24xx_enable_msix(struct qla_hw_data *ha, struct rsp_que *rsp)
 		rsp->msix = qentry;
 		qentry->handle = rsp;
 		scnprintf(qentry->name, sizeof(qentry->name),
-		    "%s", msix_entries[QLA_ATIO_VECTOR].name);
+		    "qla2xxx%lu_%s", vha->host_no,
+		    msix_entries[QLA_ATIO_VECTOR].name);
 		qentry->in_use = 1;
 		ret = request_irq(qentry->vector,
 			msix_entries[QLA_ATIO_VECTOR].handler,
-			0, msix_entries[QLA_ATIO_VECTOR].name, rsp);
+			0, qentry->name, rsp);
 		qentry->have_irq = 1;
 	}
 
@@ -3295,7 +3332,7 @@ msix_register_fail:
 	}
 
 	/* Enable MSI-X vector for response queue update for queue 0 */
-	if (IS_QLA25XX(ha) || IS_QLA83XX(ha) || IS_QLA27XX(ha)) {
+	if (IS_QLA83XX(ha) || IS_QLA27XX(ha)) {
 		if (ha->msixbase && ha->mqiobase &&
 		    (ha->max_rsp_queues > 1 || ha->max_req_queues > 1 ||
 		     ql2xmqsupport))

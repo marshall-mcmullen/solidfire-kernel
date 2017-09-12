@@ -25,7 +25,6 @@
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
-#include <generated/utsrelease.h>
 #include <linux/utsname.h>
 #include <linux/vmalloc.h>
 #include <linux/init.h>
@@ -284,7 +283,7 @@ static void tcm_qla2xxx_complete_free(struct work_struct *work)
 
 	WARN_ON(cmd->trc_flags & TRC_CMD_FREE);
 
-	cmd->vha->tgt_counters.qla_core_ret_sta_ctio++;
+	cmd->qpair->tgt_counters.qla_core_ret_sta_ctio++;
 	cmd->trc_flags |= TRC_CMD_FREE;
 	transport_generic_free_cmd(&cmd->se_cmd, 0);
 }
@@ -296,7 +295,7 @@ static void tcm_qla2xxx_complete_free(struct work_struct *work)
  */
 static void tcm_qla2xxx_free_cmd(struct qla_tgt_cmd *cmd)
 {
-	cmd->vha->tgt_counters.core_qla_free_cmd++;
+	cmd->qpair->tgt_counters.core_qla_free_cmd++;
 	cmd->cmd_in_wq = 1;
 
 	WARN_ON(cmd->trc_flags & TRC_CMD_DONE);
@@ -499,7 +498,7 @@ static int tcm_qla2xxx_handle_cmd(scsi_qla_host_t *vha, struct qla_tgt_cmd *cmd,
 	}
 #endif
 
-	cmd->vha->tgt_counters.qla_core_sbt_cmd++;
+	cmd->qpair->tgt_counters.qla_core_sbt_cmd++;
 	return target_submit_cmd(se_cmd, se_sess, cdb, &cmd->sense_buffer[0],
 				cmd->unpacked_lun, data_length, fcp_task_attr,
 				data_dir, flags);
@@ -527,7 +526,7 @@ static void tcm_qla2xxx_handle_data_work(struct work_struct *work)
 	}
 	spin_unlock_irqrestore(&cmd->cmd_lock, flags);
 
-	cmd->vha->tgt_counters.qla_core_ret_ctio++;
+	cmd->qpair->tgt_counters.qla_core_ret_ctio++;
 	if (!cmd->write_data_transferred) {
 		/*
 		 * Check if se_cmd has already been aborted via LUN_RESET, and
@@ -1890,9 +1889,9 @@ static ssize_t tcm_qla2xxx_wwn_version_show(struct config_item *item,
 		char *page)
 {
 	return sprintf(page,
-	    "TCM QLOGIC QLA2XXX NPIV capable fabric module %s on %s/%s on "
-	    UTS_RELEASE"\n", QLA2XXX_VERSION, utsname()->sysname,
-	    utsname()->machine);
+	    "TCM QLOGIC QLA2XXX NPIV capable fabric module %s on %s/%s on %s\n",
+	    QLA2XXX_VERSION, utsname()->sysname,
+	    utsname()->machine, utsname()->release);
 }
 
 CONFIGFS_ATTR_RO(tcm_qla2xxx_wwn_, version);
@@ -1996,9 +1995,9 @@ static int tcm_qla2xxx_register_configfs(void)
 {
 	int ret;
 
-	pr_debug("TCM QLOGIC QLA2XXX fabric module %s on %s/%s on "
-	    UTS_RELEASE"\n", QLA2XXX_VERSION, utsname()->sysname,
-	    utsname()->machine);
+	pr_debug("TCM QLOGIC QLA2XXX fabric module %s on %s/%s on %s\n",
+	    QLA2XXX_VERSION, utsname()->sysname,
+	    utsname()->machine, utsname()->release);
 
 	ret = target_register_template(&tcm_qla2xxx_ops);
 	if (ret)

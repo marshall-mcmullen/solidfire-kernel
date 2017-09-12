@@ -1327,7 +1327,7 @@ qla24xx_handle_plogi_done_event(struct scsi_qla_host *vha, struct event_arg *ea)
 		ql_dbg(ql_dbg_disc, vha, 0x20ea,
 		    "%s %d %8phC post gpdb\n",
 		    __func__, __LINE__, ea->fcport->port_name);
-		ea->fcport->chip_reset = vha->hw->chip_reset;
+		ea->fcport->chip_reset = vha->hw->base_qpair->chip_reset;
 		ea->fcport->logout_on_delete = 1;
 		qla24xx_post_gpdb_work(vha, ea->fcport, 0);
 		break;
@@ -2543,6 +2543,13 @@ cont_alloc:
 	ha->chain_offset = dump_size;
 	dump_size += mq_size + fce_size;
 
+	if (ha->exchoffld_buf)
+		dump_size += sizeof(struct qla2xxx_offld_chain) +
+			ha->exchoffld_size;
+	if (ha->exlogin_buf)
+		dump_size += sizeof(struct qla2xxx_offld_chain) +
+			ha->exlogin_size;
+
 allocate:
 	ha->fw_dump = vmalloc(dump_size);
 	if (!ha->fw_dump) {
@@ -3212,7 +3219,7 @@ next_check:
 	} else {
 		ql_dbg(ql_dbg_init, vha, 0x00d3,
 		    "Init Firmware -- success.\n");
-		ha->flags.fw_started = 1;
+		QLA_FW_STARTED(ha);
 	}
 
 	return (rval);
@@ -5529,6 +5536,7 @@ qla2x00_abort_isp_cleanup(scsi_qla_host_t *vha)
 	struct scsi_qla_host *vp;
 	unsigned long flags;
 	fc_port_t *fcport;
+	u16 i;
 
 	/* For ISP82XX, driver waits for completion of the commands.
 	 * online flag should be set.
@@ -5554,7 +5562,12 @@ qla2x00_abort_isp_cleanup(scsi_qla_host_t *vha)
 	ha->current_topology = 0;
 	ha->flags.fw_started = 0;
 	ha->flags.fw_init_done = 0;
-	ha->chip_reset++;
+	ha->base_qpair->chip_reset++;
+	for (i = 0; i < ha->max_qpairs; i++) {
+		if (ha->queue_pair_map[i])
+			ha->queue_pair_map[i]->chip_reset =
+				ha->base_qpair->chip_reset;
+	}
 
 	atomic_set(&vha->loop_down_timer, LOOP_DOWN_TIME);
 	if (atomic_read(&vha->loop_state) != LOOP_DOWN) {
@@ -6409,7 +6422,7 @@ qla24xx_load_risc_flash(scsi_qla_host_t *vha, uint32_t *srisc_addr,
 	    "-> template size %x bytes\n", dlen);
 	if (dlen > risc_size * sizeof(*dcode)) {
 		ql_log(ql_log_warn, vha, 0x0167,
-		    "Failed fwdump template exceeds array by %lx bytes\n",
+		    "Failed fwdump template exceeds array by %zx bytes\n",
 		    (size_t)(dlen - risc_size * sizeof(*dcode)));
 		goto default_template;
 	}
@@ -6711,7 +6724,7 @@ qla24xx_load_risc_blob(scsi_qla_host_t *vha, uint32_t *srisc_addr)
 	    "-> template size %x bytes\n", dlen);
 	if (dlen > risc_size * sizeof(*fwcode)) {
 		ql_log(ql_log_warn, vha, 0x0177,
-		    "Failed fwdump template exceeds array by %lx bytes\n",
+		    "Failed fwdump template exceeds array by %zx bytes\n",
 		    (size_t)(dlen - risc_size * sizeof(*fwcode)));
 		goto default_template;
 	}
@@ -6846,7 +6859,7 @@ qla2x00_try_to_stop_firmware(scsi_qla_host_t *vha)
 		ret = qla2x00_stop_firmware(vha);
 	}
 
-	ha->flags.fw_started = 0;
+	QLA_FW_STOPPED(ha);
 	ha->flags.fw_init_done = 0;
 }
 
@@ -7617,7 +7630,8 @@ qla24xx_update_all_fcp_prio(scsi_qla_host_t *vha)
 	return ret;
 }
 
-struct qla_qpair *qla2xxx_create_qpair(struct scsi_qla_host *vha, int qos, int vp_idx)
+struct qla_qpair *qla2xxx_create_qpair(struct scsi_qla_host *vha, int qos,
+	int vp_idx, bool startqp)
 {
 	int rsp_id = 0;
 	int  req_id = 0;
@@ -7644,6 +7658,9 @@ struct qla_qpair *qla2xxx_create_qpair(struct scsi_qla_host *vha, int qos, int v
 
 		qpair->hw = vha->hw;
 		qpair->vha = vha;
+		qpair->qp_lock_ptr = &qpair->qp_lock;
+		spin_lock_init(&qpair->qp_lock);
+		qpair->use_shadow_reg = IS_SHADOW_REG_CAPABLE(ha) ? 1 : 0;
 
 		/* Assign available que pair id */
 		mutex_lock(&ha->mq_lock);
@@ -7659,6 +7676,11 @@ struct qla_qpair *qla2xxx_create_qpair(struct scsi_qla_host *vha, int qos, int v
 		ha->queue_pair_map[qpair_id] = qpair;
 		qpair->id = qpair_id;
 		qpair->vp_idx = vp_idx;
+		INIT_LIST_HEAD(&qpair->hints_list);
+		qpair->chip_reset = ha->base_qpair->chip_reset;
+		qpair->enable_class_2 = ha->base_qpair->enable_class_2;
+		qpair->enable_explicit_conf =
+		    ha->base_qpair->enable_explicit_conf;
 
 		for (i = 0; i < ha->msix_count; i++) {
 			msix = &ha->msix_entries[i];
@@ -7677,11 +7699,14 @@ struct qla_qpair *qla2xxx_create_qpair(struct scsi_qla_host *vha, int qos, int v
 
 		qpair->msix->in_use = 1;
 		list_add_tail(&qpair->qp_list_elem, &vha->qp_list);
+		qpair->pdev = ha->pdev;
+		if (IS_QLA27XX(ha) || IS_QLA83XX(ha))
+			qpair->reqq_start_iocbs = qla_83xx_start_iocbs;
 
 		mutex_unlock(&ha->mq_lock);
 
 		/* Create response queue first */
-		rsp_id = qla25xx_create_rsp_que(ha, 0, 0, 0, qpair);
+		rsp_id = qla25xx_create_rsp_que(ha, 0, 0, 0, qpair, startqp);
 		if (!rsp_id) {
 			ql_log(ql_log_warn, vha, 0x0185,
 			    "Failed to create response queue.\n");
@@ -7691,7 +7716,8 @@ struct qla_qpair *qla2xxx_create_qpair(struct scsi_qla_host *vha, int qos, int v
 		qpair->rsp = ha->rsp_q_map[rsp_id];
 
 		/* Create request queue */
-		req_id = qla25xx_create_req_que(ha, 0, vp_idx, 0, rsp_id, qos);
+		req_id = qla25xx_create_req_que(ha, 0, vp_idx, 0, rsp_id, qos,
+		    startqp);
 		if (!req_id) {
 			ql_log(ql_log_warn, vha, 0x0186,
 			    "Failed to create request queue.\n");
@@ -7700,6 +7726,9 @@ struct qla_qpair *qla2xxx_create_qpair(struct scsi_qla_host *vha, int qos, int v
 
 		qpair->req = ha->req_q_map[req_id];
 		qpair->rsp->req = qpair->req;
+		qpair->rsp->qpair = qpair;
+		/* init qpair to this cpu. Will adjust at run time. */
+		qla_cpu_update(qpair, smp_processor_id());
 
 		if (IS_T10_PI_CAPABLE(ha) && ql2xenabledif) {
 			if (ha->fw_attributes & BIT_4)
@@ -7750,8 +7779,11 @@ fail_qid_map:
 
 int qla2xxx_delete_qpair(struct scsi_qla_host *vha, struct qla_qpair *qpair)
 {
-	int ret;
+	int ret = QLA_FUNCTION_FAILED;
 	struct qla_hw_data *ha = qpair->hw;
+
+	if (!vha->flags.qpairs_req_created && !vha->flags.qpairs_rsp_created)
+		goto fail;
 
 	qpair->delete_in_progress = 1;
 	while (atomic_read(&qpair->ref_count))
@@ -7769,8 +7801,11 @@ int qla2xxx_delete_qpair(struct scsi_qla_host *vha, struct qla_qpair *qpair)
 	clear_bit(qpair->id, ha->qpair_qid_map);
 	ha->num_qpairs--;
 	list_del(&qpair->qp_list_elem);
-	if (list_empty(&vha->qp_list))
+	if (list_empty(&vha->qp_list)) {
 		vha->flags.qpairs_available = 0;
+		vha->flags.qpairs_req_created = 0;
+		vha->flags.qpairs_rsp_created = 0;
+	}
 	mempool_destroy(qpair->srb_mempool);
 	kfree(qpair);
 	mutex_unlock(&ha->mq_lock);
