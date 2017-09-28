@@ -165,7 +165,7 @@ static void qlt_send_busy(struct qla_qpair *, struct atio_from_isp *,
  * Global Variables
  */
 static struct kmem_cache *qla_tgt_mgmt_cmd_cachep;
-static struct kmem_cache *qla_tgt_plogi_cachep;
+struct kmem_cache *qla_tgt_plogi_cachep;
 static mempool_t *qla_tgt_mgmt_cmd_mempool;
 static struct workqueue_struct *qla_tgt_wq;
 static DEFINE_MUTEX(qla_tgt_mutex);
@@ -605,11 +605,13 @@ void qla2x00_async_nack_sp_done(void *s, int res)
 		sp->fcport->fw_login_state = DSC_LS_PLOGI_COMP;
 		sp->fcport->logout_on_delete = 1;
 		sp->fcport->plogi_nack_done_deadline = jiffies + HZ;
+		sp->fcport->send_els_logo = 0;
 		break;
 
 	case SRB_NACK_PRLI:
 		sp->fcport->fw_login_state = DSC_LS_PRLI_COMP;
 		sp->fcport->deleted = 0;
+		sp->fcport->send_els_logo = 0;
 
 		if (!sp->fcport->login_succ &&
 		    !IS_SW_RESV_ADDR(sp->fcport->d_id)) {
@@ -983,7 +985,6 @@ static void qlt_free_session_done(struct work_struct *work)
 		sess->logout_on_delete, sess->keep_nport_handle,
 		sess->send_els_logo);
 
-
 	if (!IS_SW_RESV_ADDR(sess->d_id)) {
 		if (sess->send_els_logo) {
 			qlt_port_logo_t logo;
@@ -1137,6 +1138,9 @@ void qlt_unreg_sess(struct fc_port *sess)
 	sess->disc_state = DSC_DELETE_PEND;
 	sess->last_rscn_gen = sess->rscn_gen;
 	sess->last_login_gen = sess->login_gen;
+
+	if (sess->nvme_flag & NVME_FLAG_REGISTERED)
+		schedule_work(&sess->nvme_del_work);
 
 	INIT_WORK(&sess->free_work, qlt_free_session_done);
 	schedule_work(&sess->free_work);
@@ -1500,7 +1504,7 @@ int qlt_stop_phase1(struct qla_tgt *tgt)
 	ql_dbg(ql_dbg_tgt_mgt, vha, 0xf00a,
 	    "Waiting for tgt %p: sess_count=%d\n", tgt, tgt->sess_count);
 
-	wait_event(tgt->waitQ, test_tgt_sess_count(tgt));
+	wait_event_timeout(tgt->waitQ, test_tgt_sess_count(tgt), 10*HZ);
 
 	/* Big hammer */
 	if (!ha->flags.host_shutting_down &&
@@ -1508,7 +1512,7 @@ int qlt_stop_phase1(struct qla_tgt *tgt)
 		qlt_disable_vha(vha);
 
 	/* Wait for sessions to clear out (just in case) */
-	wait_event(tgt->waitQ, test_tgt_sess_count(tgt));
+	wait_event_timeout(tgt->waitQ, test_tgt_sess_count(tgt), 10*HZ);
 	return 0;
 }
 EXPORT_SYMBOL(qlt_stop_phase1);
@@ -1549,6 +1553,7 @@ static void qlt_release(struct qla_tgt *tgt)
 	u64 key = 0;
 	u16 i;
 	struct qla_qpair_hint *h;
+	struct qla_hw_data *ha = vha->hw;
 
 	if ((vha->vha_tgt.qla_tgt != NULL) && !tgt->tgt_stop &&
 	    !tgt->tgt_stopped)
@@ -1569,11 +1574,17 @@ static void qlt_release(struct qla_tgt *tgt)
 		}
 	}
 	kfree(tgt->qphints);
+	mutex_lock(&qla_tgt_mutex);
+	list_del(&vha->vha_tgt.qla_tgt->tgt_list_entry);
+	mutex_unlock(&qla_tgt_mutex);
 
 	btree_for_each_safe64(&tgt->lun_qpair_map, key, node)
 		btree_remove64(&tgt->lun_qpair_map, key);
 
 	btree_destroy64(&tgt->lun_qpair_map);
+
+	if (ha->tgt.tgt_ops && ha->tgt.tgt_ops->remove_target)
+		ha->tgt.tgt_ops->remove_target(vha);
 
 	vha->vha_tgt.qla_tgt = NULL;
 
@@ -1946,6 +1957,7 @@ static int __qlt_24xx_handle_abts(struct scsi_qla_host *vha,
 	mcmd->reset_count = ha->base_qpair->chip_reset;
 	mcmd->tmr_func = QLA_TGT_ABTS;
 	mcmd->qpair = ha->base_qpair;
+	mcmd->vha = vha;
 
 	rc = ha->tgt.tgt_ops->handle_tmr(mcmd, cmd->unpacked_lun, mcmd->tmr_func,
 	    abts->exchange_addr_to_abort);
@@ -2044,7 +2056,7 @@ static void qlt_24xx_handle_abts(struct scsi_qla_host *vha,
 static void qlt_24xx_send_task_mgmt_ctio(struct qla_qpair *qpair,
 	struct qla_tgt_mgmt_cmd *mcmd, uint32_t resp_code)
 {
-	struct scsi_qla_host *ha = qpair->vha;
+	struct scsi_qla_host *ha = mcmd->vha;
 	struct atio_from_isp *atio = &mcmd->orig_iocb.atio;
 	struct ctio7_to_24xx *ctio;
 	uint16_t temp;
@@ -3505,6 +3517,9 @@ static int __qlt_send_term_exchange(struct qla_qpair *qpair,
 
 	ql_dbg(ql_dbg_tgt, vha, 0xe009, "Sending TERM EXCH CTIO (ha=%p)\n", ha);
 
+	if (cmd)
+		vha = cmd->vha;
+
 	pkt = (request_t *)qla2x00_alloc_iocbs_ready(qpair, NULL);
 	if (pkt == NULL) {
 		ql_dbg(ql_dbg_tgt, vha, 0xe050,
@@ -3768,7 +3783,7 @@ static struct qla_tgt_cmd *qlt_ctio_to_cmd(struct scsi_qla_host *vha,
 	h &= QLA_CMD_HANDLE_MASK;
 
 	if (h != QLA_TGT_NULL_HANDLE) {
-		if (unlikely(h > req->num_outstanding_cmds)) {
+		if (unlikely(h >= req->num_outstanding_cmds)) {
 			ql_dbg(ql_dbg_tgt, vha, 0xe052,
 			    "qla_target(%d): Wrong handle %x received\n",
 			    vha->vp_idx, handle);
@@ -4420,6 +4435,7 @@ static int qlt_issue_task_mgmt(struct fc_port *sess, u64 lun,
 	mcmd->flags = flags;
 	mcmd->reset_count = ha->base_qpair->chip_reset;
 	mcmd->qpair = ha->base_qpair;
+	mcmd->vha = vha;
 
 	switch (fn) {
 	case QLA_TGT_LUN_RESET:
@@ -6212,10 +6228,6 @@ int qlt_remove_target(struct qla_hw_data *ha, struct scsi_qla_host *vha)
 	/* free left over qfull cmds */
 	qlt_init_term_exchange(vha);
 
-	mutex_lock(&qla_tgt_mutex);
-	list_del(&vha->vha_tgt.qla_tgt->tgt_list_entry);
-	mutex_unlock(&qla_tgt_mutex);
-
 	ql_dbg(ql_dbg_tgt, vha, 0xe03c, "Unregistering target for host %ld(%p)",
 	    vha->host_no, ha);
 	qlt_release(vha->vha_tgt.qla_tgt);
@@ -6590,7 +6602,6 @@ qlt_24xx_process_atio_queue(struct scsi_qla_host *vha, uint8_t ha_locked)
 
 	/* Adjust ring index */
 	WRT_REG_DWORD(ISP_ATIO_Q_OUT(vha), ha->tgt.atio_ring_index);
-	RD_REG_DWORD_RELAXED(ISP_ATIO_Q_OUT(vha));
 }
 
 void
@@ -7053,6 +7064,7 @@ void qlt_update_host_map(struct scsi_qla_host *vha, port_id_t id)
 	}
 }
 
+#ifndef CONFIG_SOLIDFIRE_LIO
 static int __init qlt_parse_ini_mode(void)
 {
 	if (strcasecmp(qlini_mode, QLA2XXX_INI_MODE_STR_EXCLUSIVE) == 0)
@@ -7068,6 +7080,7 @@ static int __init qlt_parse_ini_mode(void)
 
 	return true;
 }
+#endif
 
 int __init qlt_init(void)
 {

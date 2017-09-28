@@ -14,6 +14,8 @@
 #include <scsi/scsi_tcq.h>
 #include <scsi/scsi_bsg_fc.h>
 #include <scsi/scsi_eh.h>
+#include <scsi/fc/fc_fs.h>
+#include <linux/nvme-fc-driver.h>
 
 static void qla2x00_mbx_completion(scsi_qla_host_t *, uint16_t);
 static void qla2x00_status_entry(scsi_qla_host_t *, struct rsp_que *, void *);
@@ -432,8 +434,7 @@ qla83xx_handle_8200_aen(scsi_qla_host_t *vha, uint16_t *mb)
 			    "Register: 0x%x%x.\n", mb[7], mb[3]);
 			if (err_level == ERR_LEVEL_NON_FATAL) {
 				ql_log(ql_log_warn, vha, 0x5063,
-				    "Not a fatal error, f/w has recovered "
-				    "iteself.\n");
+				    "Not a fatal error, f/w has recovered itself.\n");
 			} else if (err_level == ERR_LEVEL_RECOVERABLE_FATAL) {
 				ql_log(ql_log_fatal, vha, 0x5064,
 				    "Recoverable Fatal error: Chip reset "
@@ -453,7 +454,7 @@ qla83xx_handle_8200_aen(scsi_qla_host_t *vha, uint16_t *mb)
 			uint16_t peg_fw_state, nw_interface_link_up;
 			uint16_t nw_interface_signal_detect, sfp_status;
 			uint16_t htbt_counter, htbt_monitor_enable;
-			uint16_t sfp_additonal_info, sfp_multirate;
+			uint16_t sfp_additional_info, sfp_multirate;
 			uint16_t sfp_tx_fault, link_speed, dcbx_status;
 
 			/*
@@ -493,7 +494,7 @@ qla83xx_handle_8200_aen(scsi_qla_host_t *vha, uint16_t *mb)
 			sfp_status = ((mb[2] & 0x0c00) >> 10);
 			htbt_counter = ((mb[2] & 0x7000) >> 12);
 			htbt_monitor_enable = ((mb[2] & 0x8000) >> 15);
-			sfp_additonal_info = (mb[6] & 0x0003);
+			sfp_additional_info = (mb[6] & 0x0003);
 			sfp_multirate = ((mb[6] & 0x0004) >> 2);
 			sfp_tx_fault = ((mb[6] & 0x0008) >> 3);
 			link_speed = ((mb[6] & 0x0070) >> 4);
@@ -508,9 +509,9 @@ qla83xx_handle_8200_aen(scsi_qla_host_t *vha, uint16_t *mb)
 			    sfp_status);
 			ql_log(ql_log_warn, vha, 0x5067,
 			    "htbt_counter=0x%x, htbt_monitor_enable=0x%x, "
-			    "sfp_additonal_info=0x%x, sfp_multirate=0x%x.\n ",
+			    "sfp_additional_info=0x%x, sfp_multirate=0x%x.\n ",
 			    htbt_counter, htbt_monitor_enable,
-			    sfp_additonal_info, sfp_multirate);
+			    sfp_additional_info, sfp_multirate);
 			ql_log(ql_log_warn, vha, 0x5068,
 			    "sfp_tx_fault=0x%x, link_state=0x%x, "
 			    "dcbx_status=0x%x.\n", sfp_tx_fault, link_speed,
@@ -800,6 +801,11 @@ skip_rio:
 
 		vha->flags.management_server_logged_in = 0;
 		qla2x00_post_aen_work(vha, FCH_EVT_LINKUP, ha->link_data_rate);
+
+		if (AUTO_DETECT_SFP_SUPPORT(vha)) {
+			set_bit(DETECT_SFP_CHANGE, &vha->dpc_flags);
+			qla2xxx_wake_dpc(vha);
+		}
 		break;
 
 	case MBA_LOOP_DOWN:		/* Loop Down Event */
@@ -1229,6 +1235,11 @@ global_port_update:
 			schedule_work(&ha->board_disable);
 		break;
 
+	case MBA_TRANS_INSERT:
+		ql_dbg(ql_dbg_async, vha, 0x5091,
+		    "Transceiver Insertion: %04x\n", mb[1]);
+		break;
+
 	default:
 		ql_dbg(ql_dbg_async, vha, 0x5057,
 		    "Unknown AEN:%04x %04x %04x %04x\n",
@@ -1538,8 +1549,6 @@ qla24xx_els_ct_entry(scsi_qla_host_t *vha, struct req_que *req,
 	sp = qla2x00_get_sp_from_handle(vha, func, req, pkt);
 	if (!sp)
 		return;
-	bsg_job = sp->u.bsg_job;
-	bsg_reply = bsg_job->reply;
 
 	type = NULL;
 	switch (sp->type) {
@@ -1578,6 +1587,8 @@ qla24xx_els_ct_entry(scsi_qla_host_t *vha, struct req_que *req,
 	/* return FC_CTELS_STATUS_OK and leave the decoding of the ELS/CT
 	 * fc payload  to the caller
 	 */
+	bsg_job = sp->u.bsg_job;
+	bsg_reply = bsg_job->reply;
 	bsg_reply->reply_data.ctels_reply.status = FC_CTELS_STATUS_OK;
 	bsg_job->reply_len = sizeof(struct fc_bsg_reply) + sizeof(fw_status);
 
@@ -1797,6 +1808,104 @@ qla24xx_tm_iocb_entry(scsi_qla_host_t *vha, struct req_que *req, void *tsk)
 		    (uint8_t *)sts, sizeof(*sts));
 
 	sp->done(sp, 0);
+}
+
+static void
+qla24xx_nvme_iocb_entry(scsi_qla_host_t *vha, struct req_que *req, void *tsk)
+{
+	const char func[] = "NVME-IOCB";
+	fc_port_t *fcport;
+	srb_t *sp;
+	struct srb_iocb *iocb;
+	struct sts_entry_24xx *sts = (struct sts_entry_24xx *)tsk;
+	uint16_t        state_flags;
+	struct nvmefc_fcp_req *fd;
+	uint16_t        ret = 0;
+	struct srb_iocb *nvme;
+
+	sp = qla2x00_get_sp_from_handle(vha, func, req, tsk);
+	if (!sp)
+		return;
+
+	iocb = &sp->u.iocb_cmd;
+	fcport = sp->fcport;
+	iocb->u.nvme.comp_status = le16_to_cpu(sts->comp_status);
+	state_flags  = le16_to_cpu(sts->state_flags);
+	fd = iocb->u.nvme.desc;
+	nvme = &sp->u.iocb_cmd;
+
+	if (unlikely(nvme->u.nvme.aen_op))
+		atomic_dec(&sp->vha->hw->nvme_active_aen_cnt);
+
+	/*
+	 * State flags: Bit 6 and 0.
+	 * If 0 is set, we don't care about 6.
+	 * both cases resp was dma'd to host buffer
+	 * if both are 0, that is good path case.
+	 * if six is set and 0 is clear, we need to
+	 * copy resp data from status iocb to resp buffer.
+	 */
+	if (!(state_flags & (SF_FCP_RSP_DMA | SF_NVME_ERSP))) {
+		iocb->u.nvme.rsp_pyld_len = 0;
+	} else if ((state_flags & SF_FCP_RSP_DMA)) {
+		iocb->u.nvme.rsp_pyld_len = le16_to_cpu(sts->nvme_rsp_pyld_len);
+	} else if (state_flags & SF_NVME_ERSP) {
+		uint32_t *inbuf, *outbuf;
+		uint16_t iter;
+
+		inbuf = (uint32_t *)&sts->nvme_ersp_data;
+		outbuf = (uint32_t *)fd->rspaddr;
+		iocb->u.nvme.rsp_pyld_len = le16_to_cpu(sts->nvme_rsp_pyld_len);
+		iter = iocb->u.nvme.rsp_pyld_len >> 2;
+		for (; iter; iter--)
+			*outbuf++ = swab32(*inbuf++);
+	} else { /* unhandled case */
+	    ql_log(ql_log_warn, fcport->vha, 0x503a,
+		"NVME-%s error. Unhandled state_flags of %x\n",
+		sp->name, state_flags);
+	}
+
+	fd->transferred_length = fd->payload_length -
+	    le32_to_cpu(sts->residual_len);
+
+	/*
+	 * If transport error then Failure (HBA rejects request)
+	 * otherwise transport will handle.
+	 */
+	if (sts->entry_status) {
+		ql_log(ql_log_warn, fcport->vha, 0x5038,
+		    "NVME-%s error - hdl=%x entry-status(%x).\n",
+		    sp->name, sp->handle, sts->entry_status);
+		ret = QLA_FUNCTION_FAILED;
+	} else  {
+		switch (le16_to_cpu(sts->comp_status)) {
+			case CS_COMPLETE:
+				ret = 0;
+			break;
+
+			case CS_ABORTED:
+			case CS_RESET:
+			case CS_PORT_UNAVAILABLE:
+			case CS_PORT_LOGGED_OUT:
+			case CS_PORT_BUSY:
+				ql_log(ql_log_warn, fcport->vha, 0x5060,
+				"NVME-%s ERR Handling - hdl=%x completion status(%x) resid=%x  ox_id=%x\n",
+				sp->name, sp->handle, sts->comp_status,
+				le32_to_cpu(sts->residual_len), sts->ox_id);
+				fd->transferred_length = fd->payload_length;
+				ret = QLA_ABORTED;
+			break;
+
+			default:
+				ql_log(ql_log_warn, fcport->vha, 0x5060,
+				"NVME-%s error - hdl=%x completion status(%x) resid=%x  ox_id=%x\n",
+				sp->name, sp->handle, sts->comp_status,
+				le32_to_cpu(sts->residual_len), sts->ox_id);
+				ret = QLA_FUNCTION_FAILED;
+				break;
+		}
+	}
+	sp->done(sp, ret);
 }
 
 /**
@@ -2289,6 +2398,12 @@ qla2x00_status_entry(scsi_qla_host_t *vha, struct rsp_que *rsp, void *pkt)
 		return;
 	}
 
+	/* NVME completion. */
+	if (sp->type == SRB_NVME_CMD) {
+		qla24xx_nvme_iocb_entry(vha, req, pkt);
+		return;
+	}
+
 	if (unlikely((state_flags & BIT_1) && (sp->type == SRB_BIDI_CMD))) {
 		qla25xx_process_bidir_status_iocb(vha, pkt, req, handle);
 		return;
@@ -2749,6 +2864,21 @@ qla24xx_abort_iocb_entry(scsi_qla_host_t *vha, struct req_que *req,
 	sp->done(sp, 0);
 }
 
+void qla24xx_nvme_ls4_iocb(struct scsi_qla_host *vha,
+    struct pt_ls4_request *pkt, struct req_que *req)
+{
+	srb_t *sp;
+	const char func[] = "LS4_IOCB";
+	uint16_t comp_status;
+
+	sp = qla2x00_get_sp_from_handle(vha, func, req, pkt);
+	if (!sp)
+		return;
+
+	comp_status = le16_to_cpu(pkt->status);
+	sp->done(sp, comp_status);
+}
+
 /**
  * qla24xx_process_response_queue() - Process response queue entries.
  * @ha: SCSI driver HA context
@@ -2821,6 +2951,10 @@ process_err:
 		case CTIO_TYPE7:
 		case CTIO_CRC2:
 			qlt_response_pkt_all_vps(vha, rsp, (response_t *)pkt);
+			break;
+		case PT_LS4_REQUEST:
+			qla24xx_nvme_ls4_iocb(vha, (struct pt_ls4_request *)pkt,
+			    rsp->req);
 			break;
 		case NOTIFY_ACK_TYPE:
 			if (pkt->handle == QLA_TGT_SKIP_HANDLE)
@@ -3035,7 +3169,6 @@ qla24xx_msix_rsp_q(int irq, void *dev_id)
 	struct device_reg_24xx __iomem *reg;
 	struct scsi_qla_host *vha;
 	unsigned long flags;
-	uint32_t stat = 0;
 
 	rsp = (struct rsp_que *) dev_id;
 	if (!rsp) {
@@ -3049,19 +3182,11 @@ qla24xx_msix_rsp_q(int irq, void *dev_id)
 	spin_lock_irqsave(&ha->hardware_lock, flags);
 
 	vha = pci_get_drvdata(ha->pdev);
-	/*
-	 * Use host_status register to check to PCI disconnection before we
-	 * we process the response queue.
-	 */
-	stat = RD_REG_DWORD(&reg->host_status);
-	if (qla2x00_check_reg32_for_disconnect(vha, stat))
-		goto out;
 	qla24xx_process_response_queue(vha, rsp);
 	if (!ha->flags.disable_msix_handshake) {
 		WRT_REG_DWORD(&reg->hccr, HCCRX_CLR_RISC_INT);
 		RD_REG_DWORD_RELAXED(&reg->hccr);
 	}
-out:
 	spin_unlock_irqrestore(&ha->hardware_lock, flags);
 
 	return IRQ_HANDLED;
