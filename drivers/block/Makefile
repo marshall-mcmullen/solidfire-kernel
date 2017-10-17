@@ -45,5 +45,4 @@ obj-$(CONFIG_ZRAM) += zram/
 skd-y		:= skd_main.o
 swim_mod-y	:= swim.o swim_asm.o
 
-obj-$(CONFIG_RADIAN)	+= radian/
 obj-$(CONFIG_MVLOKI)   += marvell/
