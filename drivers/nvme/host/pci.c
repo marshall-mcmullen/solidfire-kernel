@@ -2101,11 +2101,16 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
  * HACK ALERT - do this temporarily to allow the Radian cache card to
  * coexist with the nvme driver.  Remove this once the Radian device is
  * replaced.
+ *
+ * Note: The Radian cards seem to be dumb, and not actually set their PCI
+ * vendor or device ID in config space until after their firmware finishes
+ * loading.  Neat...
  */
 #define RADIAN_VENDOR_ID 0x1cc7
 #define RADIAN_DEVICE_ID 0x0200
 
-	if ((pdev->vendor == RADIAN_VENDOR_ID && pdev->device == RADIAN_DEVICE_ID)) {
+	if ((id->vendor == RADIAN_VENDOR_ID && id->device == RADIAN_DEVICE_ID) ||
+	    (id->vendor == 0xffffffff && id->device == 0xffffffff)) {
 		printk(KERN_INFO "nvme driver not loading on Radian, bailing out\n");
 		return -1;
 	}
