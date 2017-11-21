@@ -437,18 +437,7 @@ struct srb_iocb {
 #define SRB_NACK_PRLI	17
 #define SRB_NACK_LOGO	18
 
-enum {
-	TYPE_SRB,
-	TYPE_TGT_CMD,
-};
-
 typedef struct srb {
-	/*
-	 * Do not move cmd_type field, it needs to
-	 * line up with qla_tgt_cmd->cmd_type
-	 */
-	uint8_t cmd_type;
-	uint8_t pad[3];
 	atomic_t ref_count;
 	struct fc_port *fcport;
 	struct scsi_qla_host *vha;
@@ -3182,21 +3171,6 @@ struct qla_tc_param {
 #define QLA_PRECONFIG_VPORTS 32
 #define QLA_MAX_VPORTS_QLA24XX	128
 #define QLA_MAX_VPORTS_QLA25XX	256
-
-struct qla_tgt_counters {
-	uint64_t qla_core_sbt_cmd;
-	uint64_t core_qla_que_buf;
-	uint64_t qla_core_ret_ctio;
-	uint64_t core_qla_snd_status;
-	uint64_t qla_core_ret_sta_ctio;
-	uint64_t core_qla_free_cmd;
-	uint64_t num_q_full_sent;
-	uint64_t num_alloc_iocb_failed;
-	uint64_t num_term_xchg_sent;
-};
-
-struct qla_qpair;
-
 /* Response queue data structure */
 struct rsp_que {
 	dma_addr_t  dma;
@@ -3216,7 +3190,6 @@ struct rsp_que {
 	struct qla_msix_entry *msix;
 	struct req_que *req;
 	srb_t *status_srb; /* status continuation entry */
-	struct qla_qpair *qpair;
 
 	dma_addr_t  dma_fx00;
 	response_t *ring_fx00;
@@ -3257,15 +3230,6 @@ struct req_que {
 struct qla_qpair {
 	spinlock_t qp_lock;
 	atomic_t ref_count;
-	uint32_t lun_cnt;
-	/*
-	 * For qpair 0, qp_lock_ptr will point at hardware_lock due to
-	 * legacy code. For other Qpair(s), it will point at qp_lock.
-	 */
-	spinlock_t *qp_lock_ptr;
-	struct scsi_qla_host *vha;
-	u32 chip_reset;
-
 	/* distill these fields down to 'online=0/1'
 	 * ha->flags.eeh_busy
 	 * ha->flags.pci_channel_io_perm_failure
@@ -3275,17 +3239,13 @@ struct qla_qpair {
 	/* move vha->flags.difdix_supported here */
 	uint32_t difdix_supported:1;
 	uint32_t delete_in_progress:1;
-	uint32_t fw_started:1;
-	uint32_t enable_class_2:1;
-	uint32_t enable_explicit_conf:1;
-	uint32_t use_shadow_reg:1;
 
 	uint16_t id;			/* qp number used with FW */
+	uint16_t num_active_cmd;	/* cmds down at firmware */
+	cpumask_t cpu_mask; /* CPU mask for cpu affinity operation */
 	uint16_t vp_idx;		/* vport ID */
-	mempool_t *srb_mempool;
 
-	struct pci_dev  *pdev;
-	void (*reqq_start_iocbs)(struct qla_qpair *);
+	mempool_t *srb_mempool;
 
 	/* to do: New driver: move queues to here instead of pointers */
 	struct req_que *req;
@@ -3295,9 +3255,7 @@ struct qla_qpair {
 	struct qla_hw_data *hw;
 	struct work_struct q_work;
 	struct list_head qp_list_elem; /* vha->qp_list */
-	struct list_head hints_list;
-	uint16_t cpuid;
-	struct qla_tgt_counters tgt_counters;
+	struct scsi_qla_host *vha;
 };
 
 /* Place holder for FW buffer parameters */
@@ -3316,6 +3274,8 @@ struct scsi_qlt_host {
 
 struct qlt_hw_data {
 	/* Protected by hw lock */
+	uint32_t enable_class_2:1;
+	uint32_t enable_explicit_conf:1;
 	uint32_t node_name_set:1;
 
 	dma_addr_t atio_dma;	/* Physical address. */
@@ -3327,6 +3287,9 @@ struct qlt_hw_data {
 	uint32_t __iomem *atio_q_out;
 
 	struct qla_tgt_func_tmpl *tgt_ops;
+	struct qla_tgt_cmd *cmds[DEFAULT_OUTSTANDING_COMMANDS];
+	uint16_t current_handle;
+
 	struct qla_tgt_vp_map *tgt_vp_map;
 
 	int saved_set;
@@ -3341,7 +3304,6 @@ struct qlt_hw_data {
 
 	struct dentry *dfs_tgt_sess;
 	struct dentry *dfs_tgt_port_database;
-	struct dentry *dfs_naqp;
 
 	struct list_head q_full_list;
 	uint32_t num_pend_cmds;
@@ -3350,8 +3312,7 @@ struct qlt_hw_data {
 	spinlock_t q_full_lock;
 	uint32_t leak_exchg_thresh_hold;
 	spinlock_t sess_lock;
-	int num_act_qpairs;
-#define DEFAULT_NAQP 2
+	int rspq_vector_cpuid;
 	spinlock_t atio_lock ____cacheline_aligned;
 	struct btree_head32 host_map;
 };
@@ -3975,9 +3936,22 @@ struct qla_hw_data {
 	struct work_struct board_disable;
 
 	struct mr_data_fx00 mr;
+	uint32_t chip_reset;
 
 	struct qlt_hw_data tgt;
 	int	allow_cna_fw_dump;
+};
+
+struct qla_tgt_counters {
+	uint64_t qla_core_sbt_cmd;
+	uint64_t core_qla_que_buf;
+	uint64_t qla_core_ret_ctio;
+	uint64_t core_qla_snd_status;
+	uint64_t qla_core_ret_sta_ctio;
+	uint64_t core_qla_free_cmd;
+	uint64_t num_q_full_sent;
+	uint64_t num_alloc_iocb_failed;
+	uint64_t num_term_xchg_sent;
 };
 
 /*
@@ -4008,8 +3982,6 @@ typedef struct scsi_qla_host {
 		uint32_t	fw_tgt_reported:1;
 		uint32_t	bbcr_enable:1;
 		uint32_t	qpairs_available:1;
-		uint32_t	qpairs_req_created:1;
-		uint32_t	qpairs_rsp_created:1;
 	} flags;
 
 	atomic_t	loop_state;
@@ -4144,8 +4116,10 @@ typedef struct scsi_qla_host {
 	struct fc_host_statistics fc_host_stat;
 	struct qla_statistics qla_stats;
 	struct bidi_statistics bidi_stats;
+
 	atomic_t	vref_count;
 	struct qla8044_reset_template reset_tmplt;
+	struct qla_tgt_counters tgt_counters;
 	uint16_t	bbcr;
 	struct name_list_extended gnl;
 	/* Count of active session/fcport */
@@ -4190,26 +4164,6 @@ struct qla2_sgx {
 	srb_t			*sp;
 };
 
-#define QLA_FW_STARTED(_ha) {			\
-	int i;					\
-	_ha->flags.fw_started = 1;		\
-	_ha->base_qpair->fw_started = 1;	\
-	for (i = 0; i < _ha->max_qpairs; i++) {	\
-	if (_ha->queue_pair_map[i])	\
-	_ha->queue_pair_map[i]->fw_started = 1;	\
-	}					\
-}
-
-#define QLA_FW_STOPPED(_ha) {			\
-	int i;					\
-	_ha->flags.fw_started = 0;		\
-	_ha->base_qpair->fw_started = 0;	\
-	for (i = 0; i < _ha->max_qpairs; i++) {	\
-	if (_ha->queue_pair_map[i])	\
-	_ha->queue_pair_map[i]->fw_started = 0;	\
-	}					\
-}
-
 /*
  * Macros to help code, maintain, etc.
  */
@@ -4252,25 +4206,6 @@ struct qla2_sgx {
 
 #define QLA_QPAIR_MARK_NOT_BUSY(__qpair)		\
 	atomic_dec(&__qpair->ref_count);		\
-
-
-#define QLA_ENA_CONF(_ha) {\
-    int i;\
-    _ha->base_qpair->enable_explicit_conf = 1;	\
-    for (i = 0; i < _ha->max_qpairs; i++) {	\
-	if (_ha->queue_pair_map[i])		\
-	    _ha->queue_pair_map[i]->enable_explicit_conf = 1; \
-    }						\
-}
-
-#define QLA_DIS_CONF(_ha) {\
-    int i;\
-    _ha->base_qpair->enable_explicit_conf = 0;	\
-    for (i = 0; i < _ha->max_qpairs; i++) {	\
-	if (_ha->queue_pair_map[i])		\
-	    _ha->queue_pair_map[i]->enable_explicit_conf = 0; \
-    }						\
-}
 
 /*
  * qla2x00 local function return status codes
@@ -4326,10 +4261,6 @@ enum nexus_wait_type {
 	WAIT_LUN,
 };
 
-#define USER_CTRL_IRQ(_ha) (ql2xuctrlirq && QLA_TGT_MODE_ENABLED() && \
-	(IS_QLA27XX(_ha) || IS_QLA83XX(_ha)))
-
-#include "qla_target.h"
 #include "qla_gbl.h"
 #include "qla_dbg.h"
 #include "qla_inline.h"

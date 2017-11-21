@@ -464,9 +464,7 @@ qla2x00_start_iocbs(struct scsi_qla_host *vha, struct req_que *req)
 			req->ring_ptr++;
 
 		/* Set chip new ring index. */
-		if (ha->mqenable || IS_QLA27XX(ha)) {
-			WRT_REG_DWORD(req->req_q_in, req->ring_index);
-		} else if (IS_QLA83XX(ha)) {
+		if (ha->mqenable || IS_QLA83XX(ha) || IS_QLA27XX(ha)) {
 			WRT_REG_DWORD(req->req_q_in, req->ring_index);
 			RD_REG_DWORD_RELAXED(&ha->iobase->isp24.hccr);
 		} else if (IS_QLAFX00(ha)) {
@@ -1770,9 +1768,6 @@ qla2xxx_start_scsi_mq(srb_t *sp)
 	struct qla_hw_data *ha = vha->hw;
 	struct qla_qpair *qpair = sp->qpair;
 
-	/* Acquire qpair specific lock */
-	spin_lock_irqsave(&qpair->qp_lock, flags);
-
 	/* Setup qpair pointers */
 	rsp = qpair->rsp;
 	req = qpair->req;
@@ -1782,13 +1777,14 @@ qla2xxx_start_scsi_mq(srb_t *sp)
 
 	/* Send marker if required */
 	if (vha->marker_needed != 0) {
-		if (__qla2x00_marker(vha, req, rsp, 0, 0, MK_SYNC_ALL) !=
-		    QLA_SUCCESS) {
-			spin_unlock_irqrestore(&qpair->qp_lock, flags);
+		if (qla2x00_marker(vha, req, rsp, 0, 0, MK_SYNC_ALL) !=
+		    QLA_SUCCESS)
 			return QLA_FUNCTION_FAILED;
-		}
 		vha->marker_needed = 0;
 	}
+
+	/* Acquire qpair specific lock */
+	spin_lock_irqsave(&qpair->qp_lock, flags);
 
 	/* Check for room in outstanding command list. */
 	handle = req->current_outstanding_cmd;
@@ -1944,8 +1940,6 @@ qla2xxx_dif_start_scsi_mq(srb_t *sp)
 			return qla2xxx_start_scsi_mq(sp);
 	}
 
-	spin_lock_irqsave(&qpair->qp_lock, flags);
-
 	/* Setup qpair pointers */
 	rsp = qpair->rsp;
 	req = qpair->req;
@@ -1955,13 +1949,14 @@ qla2xxx_dif_start_scsi_mq(srb_t *sp)
 
 	/* Send marker if required */
 	if (vha->marker_needed != 0) {
-		if (__qla2x00_marker(vha, req, rsp, 0, 0, MK_SYNC_ALL) !=
-		    QLA_SUCCESS) {
-			spin_unlock_irqrestore(&qpair->qp_lock, flags);
+		if (qla2x00_marker(vha, req, rsp, 0, 0, MK_SYNC_ALL) !=
+		    QLA_SUCCESS)
 			return QLA_FUNCTION_FAILED;
-		}
 		vha->marker_needed = 0;
 	}
+
+	/* Acquire ring specific lock */
+	spin_lock_irqsave(&qpair->qp_lock, flags);
 
 	/* Check for room in outstanding command list. */
 	handle = req->current_outstanding_cmd;
@@ -2112,13 +2107,20 @@ queuing_error:
 /* Generic Control-SRB manipulation functions. */
 
 /* hardware_lock assumed to be held. */
+void *
+qla2x00_alloc_iocbs_ready(scsi_qla_host_t *vha, srb_t *sp)
+{
+	if (qla2x00_reset_active(vha))
+		return NULL;
+
+	return qla2x00_alloc_iocbs(vha, sp);
+}
 
 void *
-__qla2x00_alloc_iocbs(struct qla_qpair *qpair, srb_t *sp)
+qla2x00_alloc_iocbs(scsi_qla_host_t *vha, srb_t *sp)
 {
-	scsi_qla_host_t *vha = qpair->vha;
 	struct qla_hw_data *ha = vha->hw;
-	struct req_que *req = qpair->req;
+	struct req_que *req = ha->req_q_map[0];
 	device_reg_t *reg = ISP_QUE_REG(ha, req->id);
 	uint32_t index, handle;
 	request_t *pkt;
@@ -2192,25 +2194,8 @@ skip_cmd_array:
 	}
 
 queuing_error:
-	qpair->tgt_counters.num_alloc_iocb_failed++;
+	vha->tgt_counters.num_alloc_iocb_failed++;
 	return pkt;
-}
-
-void *
-qla2x00_alloc_iocbs_ready(struct qla_qpair *qpair, srb_t *sp)
-{
-	scsi_qla_host_t *vha = qpair->vha;
-
-	if (qla2x00_reset_active(vha))
-		return NULL;
-
-	return __qla2x00_alloc_iocbs(qpair, sp);
-}
-
-void *
-qla2x00_alloc_iocbs(struct scsi_qla_host *vha, srb_t *sp)
-{
-	return __qla2x00_alloc_iocbs(vha->hw->base_qpair, sp);
 }
 
 static void
