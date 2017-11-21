@@ -2,7 +2,7 @@ VERSION = 4
 PATCHLEVEL = 13
 SUBLEVEL = 15
 EXTRAVERSION =
-NAME = Fearless Coyote
+NAME = Solidfire Kernel
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"

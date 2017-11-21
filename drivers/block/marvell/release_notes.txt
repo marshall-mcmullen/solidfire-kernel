@@ -1,0 +1,198 @@
+Changes in drv-1.7.2 (08/15/2012)
+	- Fixed an issue with host buffers crossing 4GB boundary. 
+
+Changes in drv-1.7.1 (07/13/2012)
+	- Added a mechanism to ensure IO completions are processed in rare
+	  cases where the completions could be missed by driver
+	- Added locking mechanism for reset routines to avoid multiple
+	  parallel such operations.
+	- Fixed the log collecting script which could potentially cause DMA
+	  hangs
+
+Changes in drv-1.7.0 (03/30/2012)
+	- Integrated wamctl and wamdiag info command implementation
+	- New additional information added 'wamctl info' command output
+	- Host time synchronization with firmware.
+	- New 'setattr', 'getattr' commands to set/get device attributes
+	- 'scap_calib schedule' option deprecated. Use setattr hchkschedule
+	  option
+	- 'scap_calib' supports two modes - Online and Offline mode. Offline
+	  mode will ensure data is backed up before starting health check.
+	- wam_info_t struct changes
+		* renamed w_sc_max_vol to w_sc_exp_vol (field offset is same)
+		* added new fields at the end of the structure.
+	- Support for thermal alert and thermal log.
+	- Bug fixes
+
+Changes in drv-1.6.2 (01/14/2012)
+	- Added a command to hard reset the device
+	- Fixed an issue with running wamctl info commands from more than one
+	  processes
+	- Supercap Health check command will first trigger a backup and then
+	  start the measurement. The DRAM state will be clean during the
+	  health check and a power failure during this period will be safe.
+
+Changes in drv-1.6.1 (12/12/2011)
+	- Added dual license (MIT and GPL) header to all source files
+
+Changes in drv-1.6.0 (11/30/2011)
+	- Bumping up the version to 1.6 to be consistent with RPM versioning
+	- Using 'unlocked_ioctl' instead of legacy ioctl which uses Big Kernel
+	  Lock
+	- Minor Performance Improvements
+	- Added interrupt coalescing.
+	- Added IO stats (Run 'wamdiag <dev> d' to see stats)
+
+Changes in drv-1.2.1 (11/3/2011)
+	- Fixed an issue with Supercap health measurement
+
+Changes in drv-1.2.0 (09/28/2011)
+	- Supercap health measurement display changes
+	- Supercap health measurement does not stop any IOs. The measurement
+	  can happen in parallel with host IOs.
+
+Changes in drv-1.0.5 (07/13/2011)
+	- Added wait_on_completion API to wait on a given IO id.
+
+Changes in drv-1.0.4 (06/07/2011)
+	- Fixed an issue in block driver. If bi_vcnt is 0, complete the IO
+          and return success (returning -EINVAL results in system hang)
+
+Changes in drv-1.0.2
+	- Added basic HW compatibility check in package update
+
+Changes in drv-1.0.1
+	- Fixed an issue in update_flash in recognizing file formats
+
+Changes in drv-1.0
+	- Updated the driver version to 1.0
+	- Added command to update firmware with single package file
+	- Updated the installation and startup script
+	- Startup script now checks for incomplete firmware update and
+	  restarts the update
+
+Changes in drv-0.25e
+	- Added build_installer.sh to create an install package
+	- Added Supercap Good alert to alert mechanism (alert raised when bad
+	  supercap is replaced with a good one)
+
+Changes in drv-0.25d
+	- Fixed a conditional compilation issue in tools/wamlib.h
+
+Changes in drv-0.25c
+	- Fixed an issue with SSD_EOL alert. It was not being handled by driver.
+	- Moved character device async IO APIs under a conditional compilation
+
+Changes in drv-0.25b
+	- Made necessary changes for event structure modification.
+	- Added a command ('E') to wamdiag tool to inject errors.
+
+Changes in drv-0.25
+	- Added a shared library in user space (under tools/) providing APIs to
+	control the WAM device.
+
+Changes in drv-0.24
+	- Added APIs to do IO from other kernel modules (see wamklib.h)
+	- Added the ability to handle large IOs in character device
+	- Restructured code to use common IO 'split' mechanism for both
+	  character and block device
+
+Changes in drv-0.23
+	- Fixed a Sev 1 issue which could cause a firmware hang and pcie-reset
+	during prolonged IO test.
+
+Changes in drv-0.21
+	- Fixed an issue in initiating supercap calibration if the supercap is
+	already degraded.
+	- Added 'wamctl' - a new CLI tool (merged eeprom update and regdump
+	  diagnostic tool to wamctl tool)
+	- Renamed lokitest program to 'wamdiag'
+
+Changes in drv-0.20
+	- Fixed a race condition which could cause an interrupt to be missed.
+
+Changes in drv-0.19
+	- Added Firmware reset fix
+	- GET_INFO command now reports SSD SMART data like Erase Count, Bad
+	  Blocks and Program Error count. To get the SMART data,
+		Run: tools/lokitest <device file> I
+
+Changes in drv-0.18
+	- Added Read-only mode support during supercap calibration
+	- Added Trim command support. Running trim command will also enable
+	 the feature in the firmware.
+		Run: tools/lokitest <device file> T
+
+Changes in drv-0.17
+	- Added support for Supercap calibration
+		Run: tools/lokitest <device file> C
+
+	- Added a generic GET_INFO command to get all the device information
+		Run: tools/lokitest <device file> I
+
+	- Added support for resetting firmware
+		Run: tools/lokitest <device file> R
+
+	- Using softirqs instead of creating kernel threads
+
+Changes in drv-0.16
+	- Fixed the queue depth issue. (The driver used to fail if number of
+	  outstanding requests crossed the device queue depth)
+
+Changes in drv-0.15
+	- Added block device support. The install script will now create
+	  /dev/nvdisk(0 to n-1) device files where 'n' is the number of HBAs
+	  found.
+
+Changes in drv-0.14
+	- Added EEPROM update utility. 
+
+	  Usage: tools/update_eeprom <device file> w <eeprom file>
+
+	  Option 'w' will write the given file to the EEPROM. This roughly
+	  takes about 12 seconds. It is important that the EEPROM update
+	  process is not interrupted. It would otherwise make the device
+	  unrecognizable by the host.
+
+	  To read the contents of the EEPROM, 
+	  Run: tools/update_eeprom <device file> r > file.bin
+
+Changes in drv-0.13
+	- Added single bit ECC error reporting. Single bit errors are logged
+	  to system log.
+
+Changes in drv-0.12
+	- Fixed an issue in SSD firmware upgrade.
+		Run ./tools/lokitest <device file> u <ssd firmware file>
+
+Changes in drv-0.11
+	- Added command to query if the data in dram is valid or not
+		Run ./tools/lokitest <device file> q
+
+	- Added command to get backup statistics info
+		Run ./tools/lokitest <device file> g
+
+	- Added command to list dram blocks which encountered error during
+	  backup
+		Run ./tools/lokitest <device file> l
+
+	- Added command to clear backup statistics info and error blocks in
+	  case of a backup error.
+		Run ./tools/lokitest <device file> c
+
+	- Added command to check the write-readiness of the device
+		Run ./tools/lokitest <device file> w
+
+	- Added command to dump device event log (the command will clear the
+	  event log)
+		Run ./tools/lokitest <device file> z
+
+	(After firmware upgrade, suggest running all the above command after a
+	complete powercycle)
+
+	- Added command to display SSD firmware and serial info
+		Run ./tools/lokitest <device file> t
+
+	- Added command for SSD firmware upgrade
+		Run ./tools/lokitest <device file> u
+
