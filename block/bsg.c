@@ -906,7 +906,6 @@ static long bsg_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		struct bio *bio, *bidi_bio = NULL;
 		struct sg_io_v4 hdr;
 		int at_head;
-		u8 sense[SCSI_SENSE_BUFFERSIZE];
 
 		if (copy_from_user(&hdr, uarg, sizeof(hdr)))
 			return -EFAULT;
@@ -914,8 +913,6 @@ static long bsg_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		rq = bsg_map_hdr(bd, &hdr, file->f_mode & FMODE_WRITE);
 		if (IS_ERR(rq))
 			return PTR_ERR(rq);
-
-		scsi_req(rq)->sense = sense;
 
 		bio = rq->bio;
 		if (rq->next_rq)

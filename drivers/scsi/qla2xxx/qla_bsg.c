@@ -2480,14 +2480,6 @@ qla24xx_bsg_request(struct bsg_job *bsg_job)
 	struct Scsi_Host *host;
 	scsi_qla_host_t *vha;
 
-	if (!bsg_job || !bsg_job->request || !bsg_job->reply) {
-		ql_dbg(ql_dbg_user, NULL, 0x7000,
-		"bsg job null pointers (job=%p request=%p reply=%p).\n",
-		bsg_job, bsg_job->request, bsg_job->reply);
-
-		return -EINVAL;
-	}
-
 	/* In case no data transferred. */
 	bsg_reply->reply_payload_rcv_len = 0;
 
