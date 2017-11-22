@@ -7035,6 +7035,7 @@ void qlt_update_host_map(struct scsi_qla_host *vha, port_id_t id)
 	}
 }
 
+#ifndef SOLIDFIRE_TEMP_WWN
 static int __init qlt_parse_ini_mode(void)
 {
 	if (strcasecmp(qlini_mode, QLA2XXX_INI_MODE_STR_EXCLUSIVE) == 0)
@@ -7050,6 +7051,7 @@ static int __init qlt_parse_ini_mode(void)
 
 	return true;
 }
+#endif
 
 int __init qlt_init(void)
 {
