@@ -657,6 +657,7 @@ static void pscsi_complete_cmd(struct se_cmd *cmd, u8 scsi_status,
 		return;
 
 	cdb = &pt->pscsi_cdb[0];
+	result = pt->pscsi_result;
 
 #ifdef CONFIG_SOLIDFIRE_LIO
         if (pt->req && pt->req->special) {
