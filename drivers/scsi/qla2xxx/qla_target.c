@@ -1502,7 +1502,7 @@ int qlt_stop_phase1(struct qla_tgt *tgt)
 	ql_dbg(ql_dbg_tgt_mgt, vha, 0xf00a,
 	    "Waiting for tgt %p: sess_count=%d\n", tgt, tgt->sess_count);
 
-	wait_event_timeout(tgt->waitQ, test_tgt_sess_count(tgt), 10*HZ);
+	wait_event(tgt->waitQ, test_tgt_sess_count(tgt));
 
 	/* Big hammer */
 	if (!ha->flags.host_shutting_down &&
@@ -1510,7 +1510,7 @@ int qlt_stop_phase1(struct qla_tgt *tgt)
 		qlt_disable_vha(vha);
 
 	/* Wait for sessions to clear out (just in case) */
-	wait_event_timeout(tgt->waitQ, test_tgt_sess_count(tgt), 10*HZ);
+	wait_event(tgt->waitQ, test_tgt_sess_count(tgt));
 	return 0;
 }
 EXPORT_SYMBOL(qlt_stop_phase1);
