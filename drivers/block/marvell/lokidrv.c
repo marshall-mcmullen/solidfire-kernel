@@ -6324,7 +6324,7 @@ nvram_make_request(struct request_queue *q, struct bio *bio)
 	nvram_hba_t	*nvhba;
 	prd_merge_cntxt_t cntxt;
 
-	nvhba = (nvram_hba_t *)bio->bi_bdev->bd_disk->private_data;
+	nvhba = (nvram_hba_t *)bio->bi_disk->private_data;
 
 	if(bio->bi_vcnt <= 0) {
 		mv_printk_dbg("bi_vcnt = %d, size: %u calling endio()\n",
