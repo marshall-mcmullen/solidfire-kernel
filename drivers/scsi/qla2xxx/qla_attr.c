@@ -1102,7 +1102,8 @@ solidfire_sysfs_temp_wwn_store(struct device *dev,
  */
 static ssize_t
 solidfire_sysfs_configured_show(struct device *dev,
-                                struct device_attribute *attr, char *buf)
+                                struct device_attribute *attr, const char *buf,
+                                size_t count)
 {
         scsi_qla_host_t *vha = shost_priv(class_to_shost(dev));
         int configured = vha->vha_tgt.target_lport_ptr != NULL;
@@ -1113,8 +1114,7 @@ static DEVICE_ATTR(solidfire_temp_wwn, S_IWUSR | S_IRUGO,
                    solidfire_sysfs_temp_wwn_show,
                    solidfire_sysfs_temp_wwn_store);
 static DEVICE_ATTR(solidfire_configured, S_IRUGO,
-                   solidfire_sysfs_configured_show, 
-                   NULL);
+                   solidfire_sysfs_configured_show, NULL);
 #endif /* #ifdef SOLIDFIRE_TEMP_WWN */
 
 

@@ -195,6 +195,20 @@ void qlt_do_generation_tick(struct scsi_qla_host *vha, int *dest)
 	wmb();
 }
 
+static fc_port_t *qlt_find_fcport_by_wwpn(struct scsi_qla_host *vha,
+        uint8_t* port_name)
+{
+        fc_port_t *fcport, *retp = NULL;
+
+        list_for_each_entry(fcport, &vha->vp_fcports, list) {
+                if (memcmp(fcport->port_name, port_name, WWN_SIZE))
+                        continue;
+                retp = fcport;
+        }
+
+        return retp;
+}
+
 /* Might release hw lock, then reaquire!! */
 static inline int qlt_issue_marker(struct scsi_qla_host *vha, int vha_locked)
 {
@@ -801,6 +815,14 @@ void qlt_fc_port_added(struct scsi_qla_host *vha, fc_port_t *fcport)
 		ha->tgt.tgt_ops->update_sess(sess, fcport->d_id,
 		    fcport->loop_id,
 		    (fcport->flags & FCF_CONF_COMP_SUPPORTED));
+#ifdef CONFIG_SOLIDFIRE_LIO
+                if (!sess->qla_fcport) {
+                        sess->qla_fcport = qlt_find_fcport_by_wwpn(vha,
+                                                                sess->port_name);
+                        if (sess->qla_fcport)
+                                sess->qla_fcport->tgt_session = sess;
+                }
+#endif
 	}
 
 	if (sess && sess->local) {
@@ -1096,6 +1118,15 @@ static void qlt_free_session_done(struct work_struct *work)
 	}
 	spin_unlock_irqrestore(&ha->tgt.sess_lock, flags);
 
+        if (sess->qla_fcport) {
+#ifdef CONFIG_SOLIDFIRE_LIO
+                if (sess->qla_fcport->rport)
+                        fc_remote_port_delete(sess->qla_fcport->rport);
+#endif
+                sess->qla_fcport->tgt_session = NULL;
+                sess->qla_fcport =  NULL;
+        }
+
 	ql_dbg(ql_dbg_tgt_mgt, vha, 0xf001,
 	    "Unregistration of sess %p %8phC finished fcp_cnt %d\n",
 		sess, sess->port_name, vha->fcport_count);
@@ -1360,10 +1391,19 @@ static struct fc_port *qlt_create_sess(
 			vha->vha_tgt.qla_tgt->sess_count++;
 
 		qlt_do_generation_tick(vha, &sess->generation);
-		spin_unlock_irqrestore(&ha->tgt.sess_lock, flags);
 #ifdef CONFIG_SOLIDFIRE_LIO
-                qla2x00_reg_remote_port(vha, sess);
+                        if (!sess->qla_fcport) {
+                                sess->qla_fcport = qlt_find_fcport_by_wwpn(vha,
+                                        sess->port_name);
+                                if (sess->qla_fcport) {
+                                        sess->qla_fcport->tgt_session = sess;
+                                        spin_unlock_irqrestore(&ha->tgt.sess_lock, flags);
+                                        qla2x00_reg_remote_port(vha, sess->qla_fcport);
+                                        return sess;
+                                }
+                        }
 #endif
+		spin_unlock_irqrestore(&ha->tgt.sess_lock, flags);
 	}
 
 	ql_dbg(ql_dbg_tgt_mgt, vha, 0xf006,
@@ -1982,6 +2022,16 @@ static void qlt_24xx_handle_abts(struct scsi_qla_host *vha,
 	s_id[0] = abts->fcp_hdr_le.s_id[2];
 	s_id[1] = abts->fcp_hdr_le.s_id[1];
 	s_id[2] = abts->fcp_hdr_le.s_id[0];
+
+#ifdef CONFIG_SOLIDFIRE_LIO
+        sess->qla_fcport = qlt_find_fcport_by_wwpn(vha, sess->port_name);
+        if (sess->qla_fcport) {
+                sess->qla_fcport->tgt_session = sess;
+//#ifdef CONFIG_SOLIDFIRE_LIO
+                qla2x00_reg_remote_port(vha, sess->qla_fcport);
+//#endif
+        }
+#endif
 
 	spin_lock_irqsave(&ha->tgt.sess_lock, flags);
 	sess = ha->tgt.tgt_ops->find_sess_by_s_id(vha, s_id);
