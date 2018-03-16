@@ -675,9 +675,6 @@ qla2x00_sp_free_dma(void *ptr)
 	struct scsi_cmnd *cmd = GET_CMD_SP(sp);
 	void *ctx = GET_CMD_CTX_SP(sp);
 
-	if (!ctx)
-		goto end;
-
 	if (sp->flags & SRB_DMA_VALID) {
 		scsi_dma_unmap(cmd);
 		sp->flags &= ~SRB_DMA_VALID;
