@@ -1947,9 +1947,6 @@ struct block_device_operations {
 	int (*getgeo)(struct block_device *, struct hd_geometry *);
 	/* this callback is with swap_lock and sometimes page table lock held */
 	void (*swap_slot_free_notify) (struct block_device *, unsigned long);
-#ifdef CONFIG_SOLIDFIRE_ISCSI
-        int (*should_scan_for_partitions) (struct block_device *);
-#endif
 	struct module *owner;
 	const struct pr_ops *pr_ops;
 };
