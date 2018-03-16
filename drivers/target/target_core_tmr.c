@@ -465,11 +465,6 @@ int core_tmr_lun_reset(
 	}
 
 	atomic_long_inc(&dev->num_resets);
-#ifdef CONFIG_SOLIDFIRE_LIO
-	spin_lock_irqsave(&dev->se_tmr_lock, flags);
-	dev->dev_tmr_flags &= ~DF_TMR_LUN_RESET_ACTIVE;
-	spin_unlock_irqrestore(&dev->se_tmr_lock, flags);
-#endif
 
 	pr_debug("LUN_RESET: %s for [%s] Complete\n",
 			(preempt_and_abort_list) ? "Preempt" : "TMR",
