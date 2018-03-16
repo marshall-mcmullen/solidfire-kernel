@@ -1556,6 +1556,10 @@ static void qlt_release(struct qla_tgt *tgt)
 	    !tgt->tgt_stopped)
 		qlt_stop_phase1(tgt);
 
+	if ((vha->vha_tgt.qla_tgt != NULL) && !tgt->tgt_stop &&
+	    !tgt->tgt_stopped)
+		qlt_stop_phase1(tgt);
+
 	if ((vha->vha_tgt.qla_tgt != NULL) && !tgt->tgt_stopped)
 		qlt_stop_phase2(tgt);
 
