@@ -3,7 +3,7 @@ VERSION = 4
 PATCHLEVEL = 14
 SUBLEVEL = 27
 EXTRAVERSION =
-NAME = Petit Gorille
+NAME = Solidfire Kernel
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"

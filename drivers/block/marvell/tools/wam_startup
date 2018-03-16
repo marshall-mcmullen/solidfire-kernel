@@ -1,0 +1,44 @@
+#!/bin/sh
+
+driver="mvloki"
+device="$driver"
+cdevice="mvwam"
+blkdrv="nvdisk"
+mode="664"
+pcidev="11ab:8180"
+
+/sbin/modprobe $driver
+
+# get new major number
+cdev_major=$(grep $device /proc/devices | awk '{print $1}')
+bdev_major=$(grep $blkdrv /proc/devices | awk '{print $1}')
+
+if [ -z $cdev_major ]
+then
+    echo "Driver load failed"
+    exit 1
+fi
+
+nr_hbas=`lspci -d $pcidev | wc -l`
+nr_hbas=`expr $nr_hbas - 1`
+
+for i in `seq 0 $nr_hbas`; do
+	# remove stale device node
+	cdev_file="/dev/${cdevice}$i"
+	bdev_file="/dev/${blkdrv}$i"
+	rm -f $cdev_file
+	rm -f $bdev_file
+
+	echo "Creating device file $cdev_file"
+	mknod $cdev_file c $cdev_major $i
+
+	blk_minor=`expr $i \* 16`
+	echo "Creating blk device file $bdev_file"
+	mknod $bdev_file b $bdev_major $blk_minor
+
+	chmod $mode $cdev_file
+	chmod $mode $bdev_file
+done
+
+echo "Marvell WAM driver ${driver} loaded"
+
