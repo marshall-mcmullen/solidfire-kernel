@@ -42,7 +42,6 @@
 
 #include <target/target_core_base.h>
 #include <target/target_core_backend.h>
-#include <target/target_core_fabric.h>
 
 #include "target_core_alua.h"
 #include "target_core_internal.h"
@@ -1163,22 +1162,17 @@ static sector_t pscsi_get_blocks(struct se_device *dev)
 #ifdef SOLIDFIRE_LUN
 static void pscsi_delay_status_timer_fn(unsigned long arg)
 {
-	struct se_cmd *cmd = (struct se_cmd *)arg;
-	struct pscsi_plugin_task *pt = cmd->priv;
-	unsigned long flags;
+        struct se_cmd *cmd = (struct se_cmd *)arg;
+        struct pscsi_plugin_task *pt = cmd->priv;
 
-	pr_debug("PSCSI Deliver Status Delay status 0x%x 0x%x",
-		pt->pscsi_result, cmd->scsi_status);
+        pr_debug("PSCSI Deliver Status Delay status 0x%x 0x%x",
+                        pt->pscsi_result, cmd->scsi_status);
 	if ( cmd->scsi_status == SAM_STAT_BUSY )
-		target_complete_cmd(cmd, SAM_STAT_BUSY);
+        	target_complete_cmd(cmd, SAM_STAT_BUSY);
 	else
         	target_complete_cmd(cmd, SAM_STAT_CHECK_CONDITION);
-
-	spin_lock_irqsave(&cmd->t_state_lock, flags);
-	cmd->priv = NULL;
-	spin_unlock_irqrestore(&cmd->t_state_lock, flags);
-	target_put_sess_cmd(cmd);
-	kfree(pt);
+		
+        kfree(pt);
 }
 
 static void pscsi_set_sense_buffer(struct pscsi_plugin_task *pt, int key, int asc, int ascq)
@@ -1199,15 +1193,15 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
 {
 	struct se_cmd *cmd = req->end_io_data;
 	struct pscsi_plugin_task *pt = cmd->priv;
-	int result = scsi_req(req)->result;
-	u8 scsi_status = status_byte(result) << 1;
+        int result = scsi_req(req)->result;
+        u8 scsi_status = status_byte(result) << 1;
 #ifdef SOLIDFIRE_LUN
-	unsigned long flags;
-	unsigned int status_delay = CMD_DELAY_STATUS_TIME;
+        unsigned long flags;
+        unsigned int status_delay = CMD_DELAY_STATUS_TIME;
 #endif
 
-	pt->pscsi_result = result;
-	pt->pscsi_resid = scsi_req(req)->resid_len;
+        pt->pscsi_result = result;
+        pt->pscsi_resid = scsi_req(req)->resid_len;
 
 	cmd->scsi_status = scsi_status;
 	if (scsi_status) {
@@ -1218,23 +1212,18 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
 
 	pscsi_complete_cmd(cmd, scsi_status, scsi_req(req)->sense);
 
-	/*
-	 * Need to hold cmd kref so it can't be freed as result of possible
-	 * race with target_complete_cmd() completion work.
-	 */
-	kref_get(&cmd->cmd_kref);
 	switch (host_byte(result)) {
 	case DID_OK:
 		target_complete_cmd(cmd, scsi_status);
 		break;
 #ifdef SOLIDFIRE_LUN
-	case DID_RESET:
+        case DID_RESET:
 		if (pscsi_reset_status == SAM_STAT_CHECK_CONDITION)
 			pscsi_set_sense_buffer(pt, pscsi_reset_sense_key, pscsi_reset_asc, 
 					pscsi_reset_ascq);
 		target_complete_cmd(cmd, pscsi_reset_status);
-		break;
-	case DID_ERROR:
+                break;
+        case DID_ERROR:
                 /*
                  * DID_ERROR comes from iSCSI for outstanding tasks in the
                  * session after a LUN reset completes.
@@ -1269,7 +1258,6 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
                  * need to keep pt for delayed call of target_complete_cmd()
                  * because it is used in pscsi_transport_complete()
                  * req about to be bogus, time to forget we know it
-                 * Don't drop kref taken above - hold until timeout trips
                  */
                 spin_lock_irqsave(&cmd->t_state_lock, flags);
                 pt->req = NULL;
@@ -1301,13 +1289,10 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
          * lock here make it wait if something else is holding it. The req that pt->req points
          * to is valid until the __blk_put_request() - so making it NULL with the lock held
          * ensures nothing can find it once it's about to be freed.
-	 * clear cmd->priv since it gets freed here.
-	 */
-	spin_lock_irqsave(&cmd->t_state_lock, flags);
-	pt->req = NULL;
-	cmd->priv = NULL;
-	spin_unlock_irqrestore(&cmd->t_state_lock, flags);
-	target_put_sess_cmd(cmd);
+         */
+        spin_lock_irqsave(&cmd->t_state_lock, flags);
+        pt->req = NULL;
+        spin_unlock_irqrestore(&cmd->t_state_lock, flags);
 #endif
 	__blk_put_request(req->q, req);
 	kfree(pt);
