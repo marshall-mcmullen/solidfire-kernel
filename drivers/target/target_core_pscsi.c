@@ -1056,7 +1056,7 @@ pscsi_execute_cmd(struct se_cmd *cmd)
 	 * TCM_MAX_COMMAND_SIZE
 	 */
 	pt = kzalloc(sizeof(*pt) + scsi_command_size(cmd->t_task_cdb), GFP_KERNEL);
-	if (!pt) { 
+	if (!pt) {
 		return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
 	}
 	cmd->priv = pt;
@@ -1167,11 +1167,7 @@ static void pscsi_delay_status_timer_fn(unsigned long arg)
 
         pr_debug("PSCSI Deliver Status Delay status 0x%x 0x%x",
                         pt->pscsi_result, cmd->scsi_status);
-	if ( cmd->scsi_status == SAM_STAT_BUSY )
-        	target_complete_cmd(cmd, SAM_STAT_BUSY);
-	else
-        	target_complete_cmd(cmd, SAM_STAT_CHECK_CONDITION);
-		
+        target_complete_cmd(cmd, SAM_STAT_CHECK_CONDITION);
         kfree(pt);
 }
 
@@ -1197,7 +1193,6 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
         u8 scsi_status = status_byte(result) << 1;
 #ifdef SOLIDFIRE_LUN
         unsigned long flags;
-        unsigned int status_delay = CMD_DELAY_STATUS_TIME;
 #endif
 
         pt->pscsi_result = result;
@@ -1234,10 +1229,8 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
                 target_complete_cmd(cmd, SAM_STAT_CHECK_CONDITION);
                 break;
         case DID_SOFT_ERROR:
-		// delaying the scsi busy by 2 seconds for windows to keep retrying for longer 
-		// while the iscsi session is restored
-                cmd->scsi_status = SAM_STAT_BUSY;
-		status_delay = 2*HZ;
+                target_complete_cmd(cmd, SAM_STAT_BUSY);
+                break;
         case DID_TRANSPORT_DISRUPTED:
                 /* skip delay if already aborted */
                 spin_lock_irqsave(&cmd->t_state_lock, flags);
@@ -1251,7 +1244,8 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
                 init_timer(&cmd->delay_status_timer);
                 cmd->delay_status_timer.data = (unsigned long)cmd;
                 cmd->delay_status_timer.function = pscsi_delay_status_timer_fn;
-                cmd->delay_status_timer.expires = jiffies + status_delay;
+                cmd->delay_status_timer.expires =
+                        jiffies + CMD_DELAY_STATUS_TIME;
                 add_timer(&cmd->delay_status_timer);
                 /*
                  * ok to put req->q here because info was saved in pt
