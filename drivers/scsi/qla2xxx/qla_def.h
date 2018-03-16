@@ -4381,6 +4381,3 @@ enum nexus_wait_type {
 #include "qla_dbg.h"
 #include "qla_inline.h"
 #endif
-
-#define SOLIDFIRE_TEMP_WWN
-
