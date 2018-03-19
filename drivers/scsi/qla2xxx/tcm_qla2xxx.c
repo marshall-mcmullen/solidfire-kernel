@@ -299,6 +299,9 @@ static void tcm_qla2xxx_free_cmd(struct qla_tgt_cmd *cmd)
 	cmd->cmd_in_wq = 1;
 
 	WARN_ON(cmd->trc_flags & TRC_CMD_DONE);
+	if (cmd->trc_flags & TRC_CMD_DONE) {
+		panic("tcm_qla2xxx_free_cmd - double free\n");
+	}
 	cmd->trc_flags |= TRC_CMD_DONE;
 
 	INIT_WORK(&cmd->work, tcm_qla2xxx_complete_free);
@@ -516,6 +519,25 @@ static void tcm_qla2xxx_handle_data_work(struct work_struct *work)
 
 	cmd->qpair->tgt_counters.qla_core_ret_ctio++;
 	if (!cmd->write_data_transferred) {
+#ifdef SOLIDFIRE_LUN
+		/*
+		 * CMD_T_STOP is set for task aborts and CMD_T_ABORTED is set
+		 * for LUN resets.  cmd->t_state_lock should be held for these
+		 * checks because it is held to set those transport_state bits.
+		 */
+		spin_lock_irq(&cmd->se_cmd.t_state_lock);
+		if (cmd->se_cmd.transport_state & CMD_T_STOP) {
+			spin_unlock_irq(&cmd->se_cmd.t_state_lock);
+			complete_all(&cmd->se_cmd.t_transport_stop_comp);
+			return;
+		}
+		if (cmd->se_cmd.transport_state & CMD_T_ABORTED) {
+			spin_unlock_irq(&cmd->se_cmd.t_state_lock);
+			complete(&cmd->se_cmd.t_transport_stop_comp);
+			return;
+		}
+		spin_unlock_irq(&cmd->se_cmd.t_state_lock);
+#else
 		/*
 		 * Check if se_cmd has already been aborted via LUN_RESET, and
 		 * waiting upon completion in tcm_qla2xxx_write_pending_status()
@@ -524,6 +546,7 @@ static void tcm_qla2xxx_handle_data_work(struct work_struct *work)
 			complete(&cmd->se_cmd.t_transport_stop_comp);
 			return;
 		}
+#endif
 
 		switch (cmd->dif_err_code) {
 		case DIF_ERR_GRD:
