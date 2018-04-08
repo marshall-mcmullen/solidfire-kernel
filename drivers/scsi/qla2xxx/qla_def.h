@@ -4492,3 +4492,6 @@ struct sff_8247_a0 {
 #include "qla_dbg.h"
 #include "qla_inline.h"
 #endif
+
+#define SOLIDFIRE_TEMP_WWN
+

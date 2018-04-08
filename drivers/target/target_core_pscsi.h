@@ -12,7 +12,12 @@
 /* used in pscsi_add_device_to_list() */
 #define PSCSI_DEFAULT_QUEUEDEPTH	1
 
+#ifdef CONFIG_SOLIDFIRE_LIO
+#define PS_RETRY                0
+#else
 #define PS_RETRY		5
+#endif
+
 #define PS_TIMEOUT_DISK		(15*HZ)
 #define PS_TIMEOUT_OTHER	(500*HZ)
 
@@ -24,6 +29,13 @@ struct scsi_device;
 struct Scsi_Host;
 
 struct pscsi_plugin_task {
+	unsigned char pscsi_sense[TRANSPORT_SENSE_BUFFER];
+	int	pscsi_direction;
+	int	pscsi_result;
+	u32	pscsi_resid;
+#ifdef CONFIG_SOLIDFIRE_LIO
+        struct request *req;
+#endif
 	unsigned char pscsi_cdb[0];
 } ____cacheline_aligned;
 
@@ -41,7 +53,9 @@ struct pscsi_dev_virt {
 	int	pdv_channel_id;
 	int	pdv_target_id;
 	int	pdv_lun_id;
+#ifndef CONFIG_SOLIDFIRE_LIO
 	struct block_device *pdv_bd;
+#endif
 	struct scsi_device *pdv_sd;
 	struct Scsi_Host *pdv_lld_host;
 } ____cacheline_aligned;
