@@ -1912,11 +1912,12 @@ static int __qlt_24xx_handle_abts(struct scsi_qla_host *vha,
 	struct qla_tgt_mgmt_cmd *mcmd;
 	int rc;
 
-	if (abort_cmd_for_tag(vha, abts->exchange_addr_to_abort)) {
-		/* send TASK_ABORT response immediately */
-		qlt_24xx_send_abts_resp(ha->base_qpair, abts, FCP_TMF_CMPL, false);
-		return 0;
-	}
+        /* cmd not in LIO lists, look in qla list */
+        if (abort_cmd_for_tag(vha, abts->exchange_addr_to_abort)) {
+                /* send TASK_ABORT response immediately */
+                qlt_24xx_send_abts_resp(ha->base_qpair, abts, FCP_TMF_CMPL, false);
+                return 0;
+        }
 
 	ql_dbg(ql_dbg_tgt_mgt, vha, 0xf00f,
 	    "qla_target(%d): task abort (tag=%d)\n",
