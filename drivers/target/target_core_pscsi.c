@@ -1150,7 +1150,7 @@ static u32 pscsi_get_device_type(struct se_device *dev)
 static sector_t pscsi_get_blocks(struct se_device *dev)
 {
 #ifdef CONFIG_SOLIDFIRE_LIO
-        printk(KERN_ERR "Unexpectedly called pscsi_get_blocks.\n");
+        printk(KERN_INFO "Unexpectedly called pscsi_get_blocks.\n");
 #else
 	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
 
