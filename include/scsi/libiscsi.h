@@ -93,6 +93,9 @@ enum {
 	ISCSI_TASK_ABRT_TMF,		/* aborted due to TMF */
 	ISCSI_TASK_ABRT_SESS_RECOV,	/* aborted due to session recovery */
 	ISCSI_TASK_REQUEUE_SCSIQ,	/* qcmd requeueing to scsi-ml */
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        ISCSI_TASK_TIMED_OUT,           /* timed out, handled by block layer*/
+#endif
 };
 
 struct iscsi_r2t_info {
@@ -253,6 +256,9 @@ struct iscsi_conn {
 	/* custom statistics */
 	uint32_t		eh_abort_cnt;
 	uint32_t		fmr_unalign_cnt;
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        struct work_struct      blk_eh_work;    /* for cmd timed out */
+#endif
 };
 
 struct iscsi_pool {
@@ -353,6 +359,11 @@ struct iscsi_session {
 	int			cmds_max;	/* size of cmds array */
 	struct iscsi_task	**cmds;		/* Original Cmds arr */
 	struct iscsi_pool	cmdpool;	/* PDU's pool */
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+        uint8_t                 sessfail_fast;  /* special session fail
+                                                   processing */
+        uint8_t                 timer_set;      /* protected by session lock */
+#endif
 	void			*dd_data;	/* LLD private data */
 };
 
@@ -405,6 +416,9 @@ extern struct Scsi_Host *iscsi_host_alloc(struct scsi_host_template *sht,
 extern void iscsi_host_remove(struct Scsi_Host *shost);
 extern void iscsi_host_free(struct Scsi_Host *shost);
 extern int iscsi_target_alloc(struct scsi_target *starget);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+extern int iscsi_should_scan_for_partitions(struct scsi_device *sdev);
+#endif
 
 /*
  * session management
