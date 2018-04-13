@@ -611,6 +611,8 @@ unsigned long native_calibrate_tsc(void)
 		}
 	}
 
+	if (crystal_khz == 0)
+		return 0;
 	/*
 	 * TSC frequency determined by CPUID is a "hardware reported"
 	 * frequency and is the most accurate one so far we have. This
@@ -1294,6 +1296,12 @@ void __init tsc_init(void)
 	pr_info("Detected %lu.%03lu MHz processor\n",
 		(unsigned long)cpu_khz / 1000,
 		(unsigned long)cpu_khz % 1000);
+
+	if (cpu_khz != tsc_khz) {
+		pr_info("Detected %lu.%03lu MHz TSC",
+			(unsigned long)tsc_khz / 1000,
+			(unsigned long)tsc_khz % 1000);
+	}
 
 	/* Sanitize TSC ADJUST before cyc2ns gets initialized */
 	tsc_store_and_check_tsc_adjust(true);
