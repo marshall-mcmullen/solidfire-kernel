@@ -37,6 +37,8 @@ void pud_clear_bad(pud_t *pud)
 void pmd_clear_bad(pmd_t *pmd)
 {
 	pmd_ERROR(*pmd);
+	WARN_ON(pmd);
+	panic("pmd_clear_bad\n");
 	pmd_clear(pmd);
 }
 
