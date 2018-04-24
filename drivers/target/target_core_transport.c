@@ -3174,8 +3174,37 @@ __transport_wait_for_tasks(struct se_cmd *cmd, bool fabric_stop,
 	    !(cmd->se_cmd_flags & SCF_SCSI_TMR_CDB))
 		return false;
 
+#ifdef SOLIDFIRE_LUN
+	if (!(cmd->transport_state & CMD_T_ACTIVE)) {
+		/*
+		 * PE-1609
+		 * If write data_out transfer is active need to wait for it to
+		 * complete usually by timeout, but could also be successful.
+		 * Otherwise the operation remains active in the response ring
+		 * and will eventually complete later leading to double free.
+		 * CMD_T_ACTIVE bit is always cleared before entering write
+		 * pending state.
+		 */
+		if (cmd->t_state == TRANSPORT_WRITE_PENDING
+				|| cmd->t_state == TRANSPORT_COMPLETE_QF_WP) {
+			/*
+			 * set CMD_T_STOP so the data work function knows to
+			 * complete cmd->t_transport_stop_comp, then drop
+			 * cmd->t_state_lock for write_pending_status() and 
+			 * reacquire beofre returning.
+			 */
+			cmd->transport_state |= CMD_T_STOP;
+			spin_unlock_irqrestore(&cmd->t_state_lock, *flags);
+			cmd->se_tfo->write_pending_status(cmd);
+			spin_lock_irqsave(&cmd->t_state_lock, *flags);
+			cmd->transport_state &= ~CMD_T_STOP;
+		}
+		return false;
+	}
+#else
 	if (!(cmd->transport_state & CMD_T_ACTIVE))
 		return false;
+#endif
 
 	if (fabric_stop && *aborted)
 		return false;
