@@ -3175,7 +3175,18 @@ __transport_wait_for_tasks(struct se_cmd *cmd, bool fabric_stop,
 			 */
 			cmd->transport_state |= CMD_T_STOP;
 			spin_unlock_irqrestore(&cmd->t_state_lock, *flags);
-			cmd->se_tfo->write_pending_status(cmd);
+			if (cmd->se_tfo->write_pending_status(cmd) == 0) {
+				/*
+				 * Timed out without completing.  Need to take
+				 * a new kref on this so it won't get freed
+				 * when the abort code finishes.  Also need to
+				 * remove it from the state list.
+				 * If/when the HBA does finish this it will
+				 * finally be freed in qlt_do_ctio_completion()
+				 */
+				kref_get(&cmd->cmd_kref);
+				target_remove_from_state_list(cmd);
+			}
 			spin_lock_irqsave(&cmd->t_state_lock, *flags);
 			cmd->transport_state &= ~CMD_T_STOP;
 		}
