@@ -941,7 +941,13 @@ pscsi_map_sg(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
 			bytes = min(bytes, data_len);
 
 			if (!bio) {
+#ifdef CONFIG_SOLIDFIRE_LIO
+				nr_vecs = min_t(int,
+						queue_max_segments(pdv->pdv_sd->request_queue),
+						nr_pages);
+#else
 				nr_vecs = min_t(int, BIO_MAX_PAGES, nr_pages);
+#endif
 				nr_pages -= nr_vecs;
 				/*
 				 * Calls bio_kmalloc() and sets bio->bi_end_io()

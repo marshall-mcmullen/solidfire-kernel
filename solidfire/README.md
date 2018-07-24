@@ -59,24 +59,37 @@ valid tags in the solidfire-kernel repo.
 
 Getting all those pieces working right takes some careful work:
 
-1.  Push the kernel sources to the solidfire-kernel repo.  Official Ember
-    kernels should have a tag identifying the commit, developer builds
-    do not need it.
+1.  Push the kernel sources and the solidfire version tag to the
+    solidfire-kernel repo.
 
-2.  In the solidfire-portage repo, add a new ebuild to
-    sys-kernel/solidfire-sources with the EGIT_COMMIT pointing at the
-    commit you want to build.  If EGIT_COMMIT is a commit SHA then
-    EGIT_BRANCH needs to name the branch the commit is on, but if
-    EGIT_COMMIT is a tag then EGIT_BRANCH does not need to be set.
-    Update the manifest.  Push to the "ember" branch.
+2.  In the Ember repo, add a new ebuild to
+    portage/sys-kernel/solidfire-sources with ebuild version matching the
+    kernel's solidfire version tag.  Usually this consist of just copying
+    the previous ebuild to a new ebuild with the new version number.
 
-3.  Tell Jenkins to make a new solidfire-portage snapshot:
-    http://pw-jenkins.pw.solidfire.net:8080/job/ember-snapshots/
+3.  Enter an Ember container by running `run-in-container bash`.
 
-4.  In the ember repo, update flavors/base/conf/kernel.exports (and
-    kernel.config, if needed).
+    1.  (Inside the Ember container) Run `emerge --sync`.  This will
+        download and initialize the gentoo portage, which we need for
+        the eclasses.
 
-5.  "make element-iso"
+    2.  (Inside the Ember container) Run `ebuild
+        solidfire-sources-${X}.${Y}.${Z}.${A}s.ebuild manifest`.  This
+        will download the distfile from bitbucket and update the manifest.
+
+    3.  (Inside the Ember container) Copy the new distfile from
+        `/usr/portage/distfiles` to `/ember/work/distfiles`.
+
+    4.  Exit the Ember container.
+
+4.  In the Ember repo, publish the new distfile with `make
+    publish-distfiles`.
+
+5.  In the Ember repo, update `flavors/base/conf/kernel.exports` (and
+    `kernel.config`, if needed).
+
+6.  In the Ember repo, run `./bin/run-in-container make minimal-tarball`,
+    then `make minimal-iso`.
 
 
 ## Quick developer builds
