@@ -111,7 +111,15 @@ initrd.
 Genkernel can do many different things depending on how it's invoked,
 but here's an illustrative and useful example:
 
-`genkernel --kerneldir=/usr/src/linux --kernname=my-test --kernel-config=/usr/src/.config-my-test --makeopts=-j25 all`
+`LOCALVERSION=-my-test genkernel --kerneldir=/usr/src/linux --kernname=ember --kernel-config=/usr/src/.config-my-test --makeopts=-j25 all`
+
+The "${LOCALVERSION}" string gets appended to the ends of the filenames
+of the kernel, System.map file, and initrd in /boot.  It is easier to
+read if it begins with a "-" character.
+
+The "kernname" argument is inserted into the middle of the filenames of
+the kernel, System.map, and initrd.  It is easier to read if it does *not*
+begin or end with a "-" character.
 
 
 ### Manual builds
