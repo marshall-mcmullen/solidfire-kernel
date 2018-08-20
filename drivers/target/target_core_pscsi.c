@@ -1257,6 +1257,7 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
 		status_delay = 2*HZ;
         case DID_TRANSPORT_DISRUPTED:
                 /* skip delay if already aborted */
+		cmd->scsi_status = SAM_STAT_BUSY;
                 spin_lock_irqsave(&cmd->t_state_lock, flags);
                 if (cmd->transport_state & CMD_T_ABORTED) {
                         spin_unlock_irqrestore(&cmd->t_state_lock, flags);
