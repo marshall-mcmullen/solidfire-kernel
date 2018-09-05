@@ -667,6 +667,14 @@ static void pscsi_complete_cmd(struct se_cmd *cmd, u8 scsi_status,
                         cmd->se_cmd_flags |= SCF_UNDERFLOW_BIT;
                 }
         }
+
+        /*
+         * PE-3289: Fixed setting residual count for (p)scsi commands.
+         */
+        if (pt->pscsi_resid > 0) {
+                cmd->residual_count = pt->pscsi_resid;
+                cmd->se_cmd_flags |= SCF_UNDERFLOW_BIT;
+        }
 #endif
 
 	/*
@@ -1101,6 +1109,11 @@ pscsi_execute_cmd(struct se_cmd *cmd)
 	req->end_io_data = cmd;
 	scsi_req(req)->cmd_len = scsi_command_size(pt->pscsi_cdb);
 	scsi_req(req)->cmd = &pt->pscsi_cdb[0];
+	/*
+	 * PE-3289: Fixed setting residual count for (p)scsi commands. Storing request info in plugin task.
+	 */
+	pt->req = req;
+
 	if (pdv->pdv_sd->type == TYPE_DISK ||
 	    pdv->pdv_sd->type == TYPE_ZBC)
 #ifdef CONFIG_SOLIDFIRE_LIO
