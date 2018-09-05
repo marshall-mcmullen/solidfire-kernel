@@ -1110,7 +1110,7 @@ pscsi_execute_cmd(struct se_cmd *cmd)
 	scsi_req(req)->cmd_len = scsi_command_size(pt->pscsi_cdb);
 	scsi_req(req)->cmd = &pt->pscsi_cdb[0];
 	/*
-	 * PE-3289: Fixed setting residual count for (p)scsi commands.
+	 * PE-3289: Fixed setting residual count for (p)scsi commands. Storing request info in plugin task.
 	 */
 	pt->req = req;
 
