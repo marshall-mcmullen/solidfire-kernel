@@ -432,9 +432,40 @@ static int tcm_qla2xxx_write_pending_status(struct se_cmd *se_cmd)
 	spin_lock_irqsave(&se_cmd->t_state_lock, flags);
 	if (se_cmd->t_state == TRANSPORT_WRITE_PENDING ||
 	    se_cmd->t_state == TRANSPORT_COMPLETE_QF_WP) {
+#ifdef SOLIDFIRE_LUN
+		struct qla_tgt_cmd *cmd;
+		struct qla_qpair *qpair;
+
+		spin_unlock_irqrestore(&se_cmd->t_state_lock, flags);
+		/*
+		 * This will return 0 if the wait times out or number jiffies
+		 * remaining if completed.  If it times out need to change the
+		 * state so that qlt_do_ctio_completion() won't try to handle
+		 * data after the abort completes
+		 */
+		if (wait_for_completion_timeout(&se_cmd->t_transport_stop_comp,
+						50 * HZ) != 0) {
+			return 1;
+		}
+		cmd = container_of(se_cmd, struct qla_tgt_cmd, se_cmd);
+		qpair = cmd->qpair;
+		spin_lock_irqsave(qpair->qp_lock_ptr, flags);
+		if (cmd->state != QLA_TGT_STATE_NEED_DATA) {
+			/*
+			 * there was a race with the wait_for_completion and
+			 * the data completion from the HBA that resulted in
+			 * completion just as the wait was timing out.
+			 */
+			spin_unlock_irqrestore(qpair->qp_lock_ptr, flags);
+			return 1;
+		}
+		cmd->state = QLA_TGT_STATE_PROCESSED;
+		spin_unlock_irqrestore(qpair->qp_lock_ptr, flags);
+#else
 		spin_unlock_irqrestore(&se_cmd->t_state_lock, flags);
 		wait_for_completion_timeout(&se_cmd->t_transport_stop_comp,
 						50);
+#endif
 		return 0;
 	}
 	spin_unlock_irqrestore(&se_cmd->t_state_lock, flags);
