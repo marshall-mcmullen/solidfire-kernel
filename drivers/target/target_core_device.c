@@ -82,8 +82,11 @@ transport_lookup_cmd_lun(struct se_cmd *se_cmd, u64 unpacked_lun)
 	rcu_read_lock();
 	deve = target_nacl_find_deve(nacl, unpacked_lun);
 	if (deve) {
-		atomic_long_inc(&deve->total_cmds);
+#ifdef SOLIDFIRE_LUN
+                struct se_lun_acl *lacl;
 
+#endif
+		atomic_long_inc(&deve->total_cmds);
 		if (se_cmd->data_direction == DMA_TO_DEVICE)
 			atomic_long_add(se_cmd->data_length,
 					&deve->write_bytes);
@@ -103,6 +106,11 @@ transport_lookup_cmd_lun(struct se_cmd *se_cmd, u64 unpacked_lun)
 		se_cmd->orig_fe_lun = unpacked_lun;
 		se_cmd->se_cmd_flags |= SCF_SE_LUN_CMD;
 		se_cmd->lun_ref_active = true;
+#ifdef SOLIDFIRE_LUN
+                /* Should be OK with rcu read lock held */
+                lacl = rcu_dereference(deve->se_lun_acl);
+                se_cmd->solidfire_lun = lacl->solidfire_lun;
+#endif
 
 		if ((se_cmd->data_direction == DMA_TO_DEVICE) &&
 		    deve->lun_access_ro) {
@@ -202,6 +210,9 @@ int transport_lookup_tmr_lun(struct se_cmd *se_cmd, u64 unpacked_lun)
 	rcu_read_lock();
 	deve = target_nacl_find_deve(nacl, unpacked_lun);
 	if (deve) {
+#ifdef SOLIDFIRE_LUN
+                struct se_lun_acl *lacl;
+#endif
 		se_lun = rcu_dereference(deve->se_lun);
 
 		if (!percpu_ref_tryget_live(&se_lun->lun_ref)) {
@@ -214,6 +225,11 @@ int transport_lookup_tmr_lun(struct se_cmd *se_cmd, u64 unpacked_lun)
 		se_cmd->orig_fe_lun = unpacked_lun;
 		se_cmd->se_cmd_flags |= SCF_SE_LUN_CMD;
 		se_cmd->lun_ref_active = true;
+#ifdef SOLIDFIRE_LUN
+                /* Should be OK with rcu read lock held */
+                lacl = rcu_dereference(deve->se_lun_acl);
+                se_cmd->solidfire_lun = lacl->solidfire_lun;
+#endif
 	}
 out_unlock:
 	rcu_read_unlock();

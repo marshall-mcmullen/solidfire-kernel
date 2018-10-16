@@ -47,6 +47,9 @@
 #include "target_core_alua.h"
 #include "target_core_internal.h"
 #include "target_core_pscsi.h"
+#ifdef SOLIDFIRE_LUN
+#include <scsi/scsi_eh.h>
+#endif
 
 #ifdef SOLIDFIRE_LUN
 /* sense bytes for host bytes: SK, ASC, ASCQ */
@@ -1114,6 +1117,9 @@ pscsi_execute_cmd(struct se_cmd *cmd)
 	 */
 	pt->req = req;
 
+#ifdef CONFIG_SOLIDFIRE_LIO
+	req->solidfire_lun = cmd->solidfire_lun;
+#endif
 	if (pdv->pdv_sd->type == TYPE_DISK ||
 	    pdv->pdv_sd->type == TYPE_ZBC)
 #ifdef CONFIG_SOLIDFIRE_LIO
@@ -1312,7 +1318,12 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
 		pr_debug("PSCSI Host Byte exception at cmd: %p CDB:"
 			" 0x%02x Result: 0x%08x\n", cmd, pt->pscsi_cdb[0],
 			result);
+#ifdef SOLIDFIRE_LUN
+		target_complete_cmd(cmd, scsi_status ? scsi_status :
+				SAM_STAT_CHECK_CONDITION);
+#else
 		target_complete_cmd(cmd, SAM_STAT_CHECK_CONDITION);
+#endif
 		break;
 	}
 
@@ -1403,6 +1414,21 @@ static void pscsi_abort_task(struct se_device *dev, struct se_cmd *cmd)
 done:
         spin_unlock_irqrestore(&cmd->t_state_lock, flags);
 }
+
+static int pscsi_lu_reset(struct se_device *dev, uint64_t solidfire_lun)
+{
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
+	struct scsi_device *sd = pdv->pdv_sd;
+	int rv;
+
+	if (in_interrupt())
+		return -ENXIO;
+	if (!sd)
+		return -ENODEV;
+	rv = scsi_reset_sflun(sd, solidfire_lun);
+
+	return rv;
+}
 #endif
 
 static const struct target_backend_ops pscsi_ops = {
@@ -1425,6 +1451,7 @@ static const struct target_backend_ops pscsi_ops = {
 	.get_blocks		= pscsi_get_blocks,
 	.tb_dev_attrib_attrs	= passthrough_attrib_attrs,
 #ifdef SOLIDFIRE_LUN
+	.reset_device		= pscsi_lu_reset,
         .abort_task             = pscsi_abort_task,
 #endif
 };

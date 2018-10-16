@@ -28,6 +28,9 @@ extern bool scsi_get_sense_info_fld(const u8 *sense_buffer, int sb_len,
 				    u64 *info_out);
 
 extern int scsi_ioctl_reset(struct scsi_device *, int __user *);
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+extern int scsi_reset_sflun(struct scsi_device *, uint64_t);
+#endif
 
 struct scsi_eh_save {
 	/* saved state */

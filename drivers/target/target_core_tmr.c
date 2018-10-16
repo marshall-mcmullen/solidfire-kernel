@@ -456,6 +456,19 @@ int core_tmr_lun_reset(
 	pr_debug("LUN_RESET: %s starting for [%s], tas: %d\n",
 		(preempt_and_abort_list) ? "Preempt" : "TMR",
 		dev->transport->name, tas);
+#ifdef CONFIG_SOLIDFIRE_LIO
+	if (dev->transport->reset_device) {
+		int rv;
+
+		printk(KERN_DEBUG "%s attempt reset_device %p lun=%lld\n",
+				__func__, (char *)dev,
+				tmr->task_cmd->solidfire_lun);
+		rv = dev->transport->reset_device(dev,
+				tmr->task_cmd->solidfire_lun);
+		printk(KERN_DEBUG "%s reset_device returned %d\n",
+				__func__, rv);
+	}
+#endif
 
 	core_tmr_drain_tmr_list(dev, tmr, preempt_and_abort_list);
 	core_tmr_drain_state_list(dev, prout_cmd, tmr_sess, tas,

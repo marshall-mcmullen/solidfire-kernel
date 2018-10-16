@@ -53,6 +53,7 @@ struct target_backend_ops {
 	void (*free_prot)(struct se_device *);
 
 #ifdef SOLIDFIRE_LUN
+	int (*reset_device)(struct se_device *, uint64_t);
         void (*abort_task)(struct se_device *, struct se_cmd *);
 #endif
 

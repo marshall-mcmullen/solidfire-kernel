@@ -239,6 +239,13 @@ struct request {
 
 	/* for bidi */
 	struct request *next_rq;
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+	/*
+	 * Used by LIO for SolidFire to override which LUN a particular
+	 * request is sent to over a given iSCSI session.
+	 */
+	uint64_t solidfire_lun;
+#endif
 };
 
 static inline bool blk_op_is_scsi(unsigned int op)

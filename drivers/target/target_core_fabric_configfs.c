@@ -373,6 +373,9 @@ static struct config_group *target_fabric_make_mappedlun(
 		ret = -EINVAL;
 		goto out;
 	}
+#ifdef CONFIG_SOLIDFIRE_LIO
+        lacl->solidfire_lun = solidfire_lun;
+#endif
 
 	config_group_init_type_name(&lacl->se_lun_group, name,
 			&tf->tf_tpg_mappedlun_cit);

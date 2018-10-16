@@ -358,6 +358,17 @@ static int iscsi_check_tmf_restrictions(struct iscsi_task *task, int opcode)
 	return 0;
 }
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+static void iscsi_prep_pdu_lun(struct scsi_cmnd *sc, struct iscsi_scsi_req *hdr)
+{
+	if (sc->request && sc->request->solidfire_lun != 0) {
+		int_to_scsilun(sc->request->solidfire_lun, &hdr->lun);
+	} else {
+		int_to_scsilun(sc->device->lun, &hdr->lun);
+	}
+}
+#endif
+
 /**
  * iscsi_prep_scsi_cmd_pdu - prep iscsi scsi cmd pdu
  * @task: iscsi task
@@ -399,7 +410,11 @@ static int iscsi_prep_scsi_cmd_pdu(struct iscsi_task *task)
 		return rc;
 	hdr->opcode = ISCSI_OP_SCSI_CMD;
 	hdr->flags = ISCSI_ATTR_SIMPLE;
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+	iscsi_prep_pdu_lun(sc, hdr);
+#else
 	int_to_scsilun(sc->device->lun, &hdr->lun);
+#endif
 	task->lun = hdr->lun;
 	hdr->exp_statsn = cpu_to_be32(conn->exp_statsn);
 	cmd_len = sc->cmd_len;
@@ -2554,13 +2569,28 @@ failed_unlocked:
 }
 EXPORT_SYMBOL_GPL(iscsi_eh_abort);
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+static void iscsi_prep_tmpdu_lun(struct scsi_cmnd *sc, struct iscsi_tm *hdr)
+{
+	if (sc->request && sc->request->solidfire_lun != 0) {
+		int_to_scsilun(sc->request->solidfire_lun, &hdr->lun);
+	} else {
+		int_to_scsilun(sc->device->lun, &hdr->lun);
+	}
+}
+#endif
+
 static void iscsi_prep_lun_reset_pdu(struct scsi_cmnd *sc, struct iscsi_tm *hdr)
 {
 	memset(hdr, 0, sizeof(*hdr));
 	hdr->opcode = ISCSI_OP_SCSI_TMFUNC | ISCSI_OP_IMMEDIATE;
 	hdr->flags = ISCSI_TM_FUNC_LOGICAL_UNIT_RESET & ISCSI_FLAG_TM_FUNC_MASK;
 	hdr->flags |= ISCSI_FLAG_CMD_FINAL;
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+	iscsi_prep_tmpdu_lun(sc, hdr);
+#else
 	int_to_scsilun(sc->device->lun, &hdr->lun);
+#endif
 	hdr->rtt = RESERVED_ITT;
 }
 

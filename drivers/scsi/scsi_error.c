@@ -2378,6 +2378,66 @@ out_put_autopm_host:
 }
 EXPORT_SYMBOL(scsi_ioctl_reset);
 
+#ifdef CONFIG_SOLIDFIRE_ISCSI
+/**
+ * scsi_reset_sflun: explicitly reset a solidfire lun
+ * @dev:	scsi_device to operate on
+ * @solidfire_lun lun value for target device
+ */
+int
+scsi_reset_sflun(struct scsi_device *dev, uint64_t solidfire_lun)
+{
+	struct scsi_cmnd *scmd;
+	struct Scsi_Host *shost = dev->host;
+	struct request *rq;
+	unsigned long flags;
+	int error = 0, rtn;
+
+	if (scsi_autopm_get_host(shost) < 0)
+		return -EIO;
+	error = -EIO;
+	rq = kzalloc(sizeof(struct request) + sizeof(struct scsi_cmnd) +
+			shost->hostt->cmd_size, GFP_KERNEL);
+	if (!rq)
+		goto out_put_autopm_host;
+	blk_rq_init(NULL, rq);
+
+	scmd = (struct scsi_cmnd *)(rq + 1);
+	scsi_init_command(dev, scmd);
+	scmd->request = rq;
+	scmd->cmnd = scsi_req(rq)->cmd;
+	rq->solidfire_lun = solidfire_lun;
+	scmd->scsi_done		= scsi_reset_provider_done_command;
+	memset(&scmd->sdb, 0, sizeof(scmd->sdb));
+	scmd->cmd_len			= 0;
+	scmd->sc_data_direction		= DMA_BIDIRECTIONAL;
+	spin_lock_irqsave(shost->host_lock, flags);
+	shost->tmf_in_progress = 1;
+	spin_unlock_irqrestore(shost->host_lock, flags);
+	rtn = scsi_try_bus_device_reset(scmd);
+	error = (rtn == SUCCESS) ? 0 : -EIO;
+	spin_lock_irqsave(shost->host_lock, flags);
+	shost->tmf_in_progress = 0;
+	spin_unlock_irqrestore(shost->host_lock, flags);
+	/*
+	 * be sure to wake up anyone who was sleeping or had their queue
+	 * suspended while we performed the TMF.
+	 */
+	SCSI_LOG_ERROR_RECOVERY(3,
+		shost_printk(KERN_INFO, shost,
+			     "waking up host to restart after TMF\n"));
+	wake_up(&shost->host_wait);
+	scsi_run_host_queues(shost);
+	scsi_put_command(scmd);
+	kfree(rq);
+
+out_put_autopm_host:
+	scsi_autopm_put_host(shost);
+	return error;
+}
+EXPORT_SYMBOL(scsi_reset_sflun);
+#endif
+
 bool scsi_command_normalize_sense(const struct scsi_cmnd *cmd,
 				  struct scsi_sense_hdr *sshdr)
 {

@@ -481,6 +481,9 @@ struct se_cmd {
 	struct list_head	se_delayed_node;
 	struct list_head	se_qf_node;
 	struct se_device      *se_dev;
+#ifdef SOLIDFIRE_LUN
+        u64                     solidfire_lun;
+#endif
 	struct se_lun		*se_lun;
 	/* Only used for internal passthrough and legacy TCM fabric modules */
 	struct se_session	*se_sess;
@@ -641,6 +644,9 @@ struct se_ml_stat_grps {
 
 struct se_lun_acl {
 	u64			mapped_lun;
+#ifdef CONFIG_SOLIDFIRE_LIO
+        u64                     solidfire_lun;
+#endif
 	struct se_node_acl	*se_lun_nacl;
 	struct se_lun		*se_lun;
 	struct config_group	se_lun_group;
