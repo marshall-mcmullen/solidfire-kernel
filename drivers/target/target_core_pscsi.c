@@ -1319,8 +1319,6 @@ static void pscsi_req_done(struct request *req, blk_status_t status)
 			" 0x%02x Result: 0x%08x\n", cmd, pt->pscsi_cdb[0],
 			result);
 #ifdef SOLIDFIRE_LUN
-		printk(KERN_ALERT "%s result=0x%x status=0x%x.\n",
-				__func__, host_byte(result), scsi_status);
 		target_complete_cmd(cmd, scsi_status ? scsi_status :
 				SAM_STAT_CHECK_CONDITION);
 #else
