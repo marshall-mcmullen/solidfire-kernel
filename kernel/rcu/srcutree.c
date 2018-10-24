@@ -941,7 +941,6 @@ void call_srcu(struct srcu_struct *sp, struct rcu_head *rhp,
 }
 EXPORT_SYMBOL_GPL(call_srcu);
 
-int nsynchronizesrcu = 0;
 /*
  * Helper function for synchronize_srcu() and synchronize_srcu_expedited().
  */
