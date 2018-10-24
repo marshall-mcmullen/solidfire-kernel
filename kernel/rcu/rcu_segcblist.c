@@ -129,6 +129,7 @@ struct rcu_head *rcu_segcblist_first_pend_cb(struct rcu_segcblist *rsclp)
 	return NULL;
 }
 
+#define  SOLIDFIRE_WORKAROUND
 /*
  * Enqueue the specified callback onto the specified rcu_segcblist
  * structure, updating accounting as needed.  Note that the ->len
@@ -148,6 +149,9 @@ void rcu_segcblist_enqueue(struct rcu_segcblist *rsclp,
 	rhp->next = NULL;
 	*rsclp->tails[RCU_NEXT_TAIL] = rhp;
 	rsclp->tails[RCU_NEXT_TAIL] = &rhp->next;
+#ifdef SOLIDFIRE_WORKAROUND
+	smp_mb();
+#endif
 }
 
 /*

@@ -404,6 +404,8 @@ EXPORT_SYMBOL_GPL(__srcu_read_unlock);
  */
 #define SRCU_RETRY_CHECK_DELAY		5
 
+#define SOLIDFIRE_WORKAROUND
+
 /*
  * Start an SRCU grace period.
  */
@@ -414,11 +416,17 @@ static void srcu_gp_start(struct srcu_struct *sp)
 
 	lockdep_assert_held(&sp->lock);
 	WARN_ON_ONCE(ULONG_CMP_GE(sp->srcu_gp_seq, sp->srcu_gp_seq_needed));
+#ifdef SOLIDFIRE_WORKAROUND
+	raw_spin_lock_rcu_node(sdp);
+#endif
 	rcu_segcblist_advance(&sdp->srcu_cblist,
 			      rcu_seq_current(&sp->srcu_gp_seq));
 	(void)rcu_segcblist_accelerate(&sdp->srcu_cblist,
 				       rcu_seq_snap(&sp->srcu_gp_seq));
 	smp_mb(); /* Order prior store to ->srcu_gp_seq_needed vs. GP start. */
+#ifdef SOLIDFIRE_WORKAROUND
+	raw_spin_unlock_rcu_node(sdp);
+#endif
 	rcu_seq_start(&sp->srcu_gp_seq);
 	state = rcu_seq_state(READ_ONCE(sp->srcu_gp_seq));
 	WARN_ON_ONCE(state != SRCU_STATE_SCAN1);
@@ -783,6 +791,56 @@ static void srcu_leak_callback(struct rcu_head *rhp)
 {
 }
 
+#ifdef SOLIDFIRE_WORKAROUND
+int fix_cblist = 0;
+int check_cblist = 0;
+unsigned long last_fix_jiffies;
+
+/*
+ * Attempt to correct broken cblist
+ * 	broken list is indicated by cbp->head != NULL and
+ *	cbp->tails[RCU_NEXT_TAIL] == &cbp->head
+ *	if detected set up callback to state of a single callback set up
+ *	by __call_srcu() after rcu_segcblist_accelerate()
+ */
+static void srcu_check_fix_cblist(struct srcu_data *sdp)
+{
+	struct rcu_segcblist *cbp = &sdp->srcu_cblist;
+	struct callback_head *cbhd;
+
+	check_cblist++;
+	if (cbp->head == NULL ||
+			cbp->tails[RCU_NEXT_TAIL] != &cbp->head)
+		return;
+	last_fix_jiffies = jiffies;
+	printk(KERN_ALERT "%s srcu_data %p detected bad srcu callback %p"
+			" len=%ld len_lazy=%ld\n", __func__,
+			(void *) sdp, (void *) cbp, cbp->len, cbp->len_lazy);
+	printk(KERN_ALERT "\thead=0x%lx tails=0x%lx 0x%lx 0x%lx 0x%lx\n",
+			cbp->head,
+			cbp->tails[RCU_DONE_TAIL],
+			cbp->tails[RCU_WAIT_TAIL],
+			cbp->tails[RCU_NEXT_READY_TAIL],
+			cbp->tails[RCU_NEXT_TAIL]);
+	/*
+	 * fix up callback like it would look like at end of __call_srcu()
+	 * after rcu_segcblist_accelerate()
+	 */
+	for (cbhd = cbp->head; cbhd->next != NULL; )
+		cbhd = cbhd->next;
+	fix_cblist++;
+	cbp->tails[RCU_WAIT_TAIL] = &cbhd->next;
+	cbp->tails[RCU_NEXT_READY_TAIL] = &cbhd->next;
+	cbp->tails[RCU_NEXT_TAIL] = &cbhd->next;
+	printk(KERN_ALERT "%s - after fix head=0x%lx tails=0x%lx 0x%lx 0x%lx 0x%lx\n",
+			__func__, cbp->head,
+			cbp->tails[RCU_DONE_TAIL],
+			cbp->tails[RCU_WAIT_TAIL],
+			cbp->tails[RCU_NEXT_READY_TAIL],
+			cbp->tails[RCU_NEXT_TAIL]);
+}
+#endif
+
 /*
  * Enqueue an SRCU callback on the srcu_data structure associated with
  * the current CPU and the specified srcu_struct structure, initiating
@@ -828,9 +886,14 @@ void __call_srcu(struct srcu_struct *sp, struct rcu_head *rhp,
 		return;
 	}
 	rhp->func = func;
+#ifdef SOLIDFIRE_WORKAROUND
+	/* make sure it can't switch cpu's after dropping lock below */
+	preempt_disable();
+#endif
 	local_irq_save(flags);
 	sdp = this_cpu_ptr(sp->sda);
 	raw_spin_lock_rcu_node(sdp);
+	srcu_check_fix_cblist(sdp);
 	rcu_segcblist_enqueue(&sdp->srcu_cblist, rhp, false);
 	rcu_segcblist_advance(&sdp->srcu_cblist,
 			      rcu_seq_current(&sp->srcu_gp_seq));
@@ -849,6 +912,9 @@ void __call_srcu(struct srcu_struct *sp, struct rcu_head *rhp,
 		srcu_funnel_gp_start(sp, sdp, s, do_norm);
 	else if (needexp)
 		srcu_funnel_exp_start(sp, sdp->mynode, s);
+#ifdef SOLIDFIRE_WORKAROUND
+	preempt_enable();
+#endif
 }
 
 /**
@@ -1142,6 +1208,9 @@ static void srcu_invoke_callbacks(struct work_struct *work)
 	sp = sdp->sp;
 	rcu_cblist_init(&ready_cbs);
 	raw_spin_lock_irq_rcu_node(sdp);
+#ifdef SOLIDFIRE_WORKAROUND
+	srcu_check_fix_cblist(sdp);
+#endif
 	rcu_segcblist_advance(&sdp->srcu_cblist,
 			      rcu_seq_current(&sp->srcu_gp_seq));
 	if (sdp->srcu_cblist_invoking ||
@@ -1171,6 +1240,7 @@ static void srcu_invoke_callbacks(struct work_struct *work)
 	(void)rcu_segcblist_accelerate(&sdp->srcu_cblist,
 				       rcu_seq_snap(&sp->srcu_gp_seq));
 	sdp->srcu_cblist_invoking = false;
+	/* check here too ??? */
 	more = rcu_segcblist_ready_cbs(&sdp->srcu_cblist);
 	raw_spin_unlock_irq_rcu_node(sdp);
 	if (more)
